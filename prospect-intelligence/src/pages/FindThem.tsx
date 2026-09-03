@@ -274,11 +274,14 @@ function CaseDossier({ data, onSave }: { data: CaseData; onSave: () => void }) {
               </p>
               {data.contacts && data.contacts.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {data.contacts.map((c: any, i: number) => (
-                    <span key={i} className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium border ${c.confidence > 70 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : c.confidence > 40 ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                      {c.type === "email" ? "✉️" : c.type === "phone" ? "📞" : "in"} {c.value} <span className="opacity-60">· {c.confidence}%</span>
-                    </span>
-                  ))}
+                  {data.contacts.map((c: any, i: number) => {
+                    const icon = c.type === "email" ? "✉️" : c.type === "phone" ? "📞" : c.type === "linkedin" ? "in" : c.type === "twitter" ? "𝕏" : c.type === "github" ? "gh" : c.type === "instagram" ? "📸" : c.type === "facebook" ? "fb" : c.type === "youtube" ? "▶️" : "🔗";
+                    return (
+                      <span key={i} className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium border max-w-[220px] truncate ${c.confidence > 70 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : c.confidence > 40 ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                        <span className="shrink-0">{icon}</span> <span className="truncate">{c.value}</span> <span className="opacity-60 shrink-0">· {c.confidence}%</span>
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>
