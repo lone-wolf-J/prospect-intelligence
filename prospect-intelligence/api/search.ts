@@ -35,12 +35,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const rawQuery = req.body?.query;
     const query = validateQuery(rawQuery);
+    const candidate = req.body?.candidate || null;
+    // Validate candidate if provided (from disambiguation manual refine)
+    let refinedCandidate: any = null;
+    if (candidate && typeof candidate === "object") {
+      refinedCandidate = {
+        name: typeof candidate.name === "string" ? candidate.name.slice(0, 80) : "",
+        company: typeof candidate.company === "string" ? candidate.company.slice(0, 80) : "",
+        location: typeof candidate.location === "string" ? candidate.location.slice(0, 80) : "",
+        linkedin: typeof candidate.url === "string" ? candidate.url.slice(0, 200) : typeof candidate.linkedin === "string" ? candidate.linkedin.slice(0, 200) : "",
+        title: typeof candidate.title === "string" ? candidate.title.slice(0, 80) : "",
+      };
+    }
 
     console.log("[Vercel-Search] GROQ_API_KEY:", process.env.GROQ_API_KEY ? "SET" : "MISSING");
-    console.log("[Vercel-Search] Query:", query.slice(0, 80));
+    console.log("[Vercel-Search] Query:", query.slice(0, 80), refinedCandidate ? `+ candidate ${refinedCandidate.name}` : "");
 
     const { searchProspectHandler } = await import("./search-handler.js");
-    const result = await searchProspectHandler(query);
+    const result = await searchProspectHandler(query, refinedCandidate);
 
     return res.status(200).json(result);
   } catch (e: any) {

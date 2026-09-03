@@ -60,17 +60,17 @@ function getConfigForUrl(url: string) {
   return SCRAPER_CONFIG.default;
 }
 
-export async function searchProspectHandler(query: string) {
+export async function searchProspectHandler(query: string, candidate: any = null) {
   // Input validation at handler level (defense in depth)
   query = validateQuery(query);
-  const normalized = query.toLowerCase().trim();
+  const normalized = (candidate ? `${query}::${candidate.company || ""}::${candidate.location || ""}` : query).toLowerCase().trim();
   const cached = cache.get(normalized);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
     console.log("[Cache] HIT for", query);
     return { ...cached.data, _cached: true };
   }
-  console.log("[SearchHandler] Starting crawl for:", query);
-  const crawlResults = await crawlEverywhere(query);
+  console.log("[SearchHandler] Starting crawl for:", query, candidate ? `with candidate ${candidate.name}` : "");
+  const crawlResults = await crawlEverywhere(query, candidate);
   console.log("[SearchHandler] Crawl done. web:", (crawlResults.web as any[])?.length, "deep:", crawlResults.deepPages?.length);
 
   let aiAnalysis: any = null;
@@ -100,7 +100,7 @@ export async function searchProspectHandler(query: string) {
   return result;
 }
 
-async function crawlEverywhere(query: string) {
+async function crawlEverywhere(query: string, candidate: any = null) {
   const fetchWithTimeout = async (url: string, opts: any = {}, ms = 12000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
@@ -233,8 +233,21 @@ async function crawlEverywhere(query: string) {
     }, "allorigins", 1).catch(() => [] as any[]);
   }
 
-  // Tier 1 execution: Serper primary, others only if Serper <3 to save quota (HTTPX-style async with concurrency + asyncio pattern)
-  const serperResults = await withRetry(() => fetchSerper(query), "serper-tier", 1).catch(() => [] as any[]);
+  // Tier 1 execution: comprehensive when candidate selected - scrape ALL sources for holistic view, not just chosen link
+  let serperResults: any[] = [];
+  if (candidate && candidate.name) {
+    // Comprehensive: run 2-3 queries in parallel to get holistic view (professional + personal)
+    const queries = [query, `${candidate.name} ${candidate.company || ""}`.trim(), `${candidate.name} ${candidate.location || ""} ${candidate.title || ""}`.trim()].filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 2);
+    console.log("[Crawl] Comprehensive mode queries:", queries);
+    const serperSets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
+    serperResults = ([] as any[]).concat(...serperSets);
+    // Deduplicate by URL
+    const seenQ = new Set<string>();
+    serperResults = serperResults.filter((r: any) => { if (!r.url || seenQ.has(r.url)) return false; seenQ.add(r.url); return true; });
+    console.log("[Crawl] Serper comprehensive", serperResults.length);
+  } else {
+    serperResults = await withRetry(() => fetchSerper(query), "serper-tier", 1).catch(() => [] as any[]);
+  }
   let tavilyResults: any[] = []; let braveResults: any[] = []; let serpApiResults: any[] = []; let bingApiResults: any[] = []; let wikiResults: any[] = [];
   if (serperResults.length < 3) {
     console.log("[Crawl] Serper low, trying Tavily + Brave + SerpApi in parallel (HTTPX async)...");
@@ -245,7 +258,6 @@ async function crawlEverywhere(query: string) {
     bingApiResults = settled[3].status === "fulfilled" ? (settled[3].value as any[]) : [];
     wikiResults = settled[4].status === "fulfilled" ? (settled[4].value as any[]) : [];
     const ddgJson = settled[5].status === "fulfilled" ? (settled[5].value as any[]) : [];
-    // Add DDG JSON results to pool
     tavilyResults = [...tavilyResults, ...ddgJson];
   } else {
     console.log("[Crawl] Serper sufficient, skipping paid fallbacks to save quota");
@@ -261,11 +273,19 @@ async function crawlEverywhere(query: string) {
   const seen = new Set(); const web = mergedSearch.filter((r: any) => { if (!r.url || seen.has(r.url)) return false; seen.add(r.url); return true; }).slice(0, 12);
   console.log("[Crawl] Tier1 total", web.length, "sources:", [...new Set(web.map((w: any) => w.source))].join(","));
 
-  // ---------- Tier 2: DEEP SCRAPE (browser rendering only when necessary - per Strategies For Dynamic Content) ----------
-  // Config-driven: linkedin.com needs browser, others use HTML/parser per fabienvauchelles/scraping-workshop
+  // ---------- Tier 2: DEEP SCRAPE (comprehensive - scrape ALL relevant pages, not just chosen link's domain) ----------
+  // When candidate selected, ensure their LinkedIn + top web results are all deep-scraped for holistic view
   const hash = query.split("").reduce((a: number, b: string) => a + b.charCodeAt(0), 0);
   const deepPages: any[] = [];
-  const topUrls = web.slice(0, 3).map((w: any) => w.url).filter(Boolean);
+  let topUrls = web.slice(0, 3).map((w: any) => w.url).filter(Boolean);
+  // If candidate provided with LinkedIn, ensure it's in deep scrape list even if not top-ranked
+  if (candidate?.linkedin && isUrlAllowed(candidate.linkedin) && !topUrls.includes(candidate.linkedin)) {
+    topUrls = [candidate.linkedin, ...topUrls].slice(0, 3);
+    console.log("[Deep] Added candidate LinkedIn to deep scrape");
+  }
+  if (candidate?.url && isUrlAllowed(candidate.url) && !topUrls.includes(candidate.url)) {
+    topUrls = [...topUrls, candidate.url].slice(0, 3);
+  }
 
   async function deepScrapeScrapeDo(url: string) {
     if (!isUrlAllowed(url)) { console.log("[Deep] Scrape.do blocked SSRF", url.slice(0, 60)); return null; }
@@ -387,31 +407,41 @@ async function crawlEverywhere(query: string) {
     }, "public-apis-repo", 0).catch(() => null);
   }
 
-  // Extract contacts with confidence from all web text (for Contact section)
+  // Extract contacts with confidence - strict, no hallucination: only formatted, near keywords
   function extractContactsAll(webList: any[], deepList: any[]) {
     const allText = [...webList.map((w: any) => `${w.title} ${w.snippet} ${w.url}`), ...deepList.map((d: any) => d.content || "")].join(" \n ");
     const contacts: any[] = [];
     const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-    const phoneRe = /(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
+    // Strict phone: must have separators or country code, not just 10 contiguous digits (avoids IDs like 7290850274)
+    const phoneRe = /(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}/g;
     const emails = allText.match(emailRe) || [];
-    const phones = allText.match(phoneRe) || [];
     const seen = new Set<string>();
     for (const e of emails.slice(0, 3)) {
       const lower = e.toLowerCase();
-      if (seen.has(lower) || lower.includes("example.com") || lower.includes("test@")) continue;
+      if (seen.has(lower) || lower.includes("example.com") || lower.includes("test@") || lower.includes("noreply")) continue;
       seen.add(lower);
-      const nearName = allText.toLowerCase().includes(query.toLowerCase().split(" ")[0].toLowerCase());
-      contacts.push({ type: "email", value: lower, confidence: nearName ? 85 : 65, source: "scraped" });
+      // Confidence 90 only if email appears near person's name or company domain
+      const lowerAll = allText.toLowerCase();
+      const nameFirst = query.toLowerCase().split(" ")[0];
+      const nearName = lowerAll.indexOf(lower) > -1 && lowerAll.slice(Math.max(0, lowerAll.indexOf(lower) - 120), lowerAll.indexOf(lower) + 120).includes(nameFirst);
+      const domainMatch = webList.some((w: any) => w.url && lower.endsWith(w.url.split("/")[2]?.replace("www.", "") || ""));
+      contacts.push({ type: "email", value: lower, confidence: nearName || domainMatch ? 85 : 65, source: "scraped" });
     }
-    for (const p of phones.slice(0, 2)) {
-      const digits = p.replace(/\D/g, "");
-      if (digits.length < 10 || digits.length > 15) continue;
+    // Phones: only if near phone/contact keywords or well-formatted
+    const phoneContextRe = /(phone|contact|tel|mobile|call)[^.\n]{0,80}(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/gi;
+    let m;
+    while ((m = phoneContextRe.exec(allText)) && contacts.filter(c => c.type === "phone").length < 2) {
+      const full = m[0];
+      const phoneMatch = full.match(/(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+      if (!phoneMatch) continue;
+      const p = phoneMatch[0].trim();
       if (seen.has(p)) continue;
       seen.add(p);
-      contacts.push({ type: "phone", value: p.trim(), confidence: 55, source: "scraped" });
+      contacts.push({ type: "phone", value: p, confidence: 70, source: "scraped" });
     }
     const linkedinHit2 = webList.find((r: any) => r.url.includes("linkedin.com/in/"));
     if (linkedinHit2) contacts.unshift({ type: "linkedin", value: linkedinHit2.url, confidence: 95, source: "linkedin" });
+    // If no contacts, return empty - AI will set null, not hallucinate
     return contacts;
   }
 
