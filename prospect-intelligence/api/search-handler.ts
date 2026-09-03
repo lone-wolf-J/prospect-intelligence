@@ -45,12 +45,34 @@ async function withRetry<T>(fn: () => Promise<T>, source: string, retries = 2): 
   throw lastErr;
 }
 
+// Company lineage - handles renames so search understands old -> new (e.g., PreludeSys/DemandBlue -> LevelShift)
+const COMPANY_LINEAGE: Record<string, string> = {
+  "preludesys": "LevelShift (formerly PreludeSys, est. 1998)",
+  "prelude sys": "LevelShift",
+  "demandblue": "LevelShift (formerly DemandBlue, est. 2012)",
+  "demand blue": "LevelShift",
+  "demanddynamics": "LevelShift (formerly DemandDynamics, est. 2020)",
+  "demand dynamics": "LevelShift",
+  "levelshift": "LevelShift",
+};
+function resolveCompanyLineage(name: string): string | null {
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  for (const [old, neu] of Object.entries(COMPANY_LINEAGE)) {
+    if (lower.includes(old)) return neu;
+  }
+  return null;
+}
+
 // Config-driven scrapers (per https://github.com/fabienvauchelles/scraping-workshop - per-site configs)
 const SCRAPER_CONFIG: Record<string, { parser: "api" | "html" | "browser"; priority: number }> = {
-  "linkedin.com": { parser: "browser", priority: 1 }, // JS-heavy, needs Firecrawl/Scrape.do
+  "linkedin.com": { parser: "browser", priority: 1 },
   "levelshift.com": { parser: "html", priority: 2 },
   "preludesys.com": { parser: "html", priority: 2 },
+  "demandblue.com": { parser: "html", priority: 2 },
   "equilar.com": { parser: "api", priority: 2 },
+  "theorg.com": { parser: "html", priority: 2 },
+  "crunchbase.com": { parser: "browser", priority: 2 },
   "default": { parser: "html", priority: 3 },
 };
 function getConfigForUrl(url: string) {
@@ -233,20 +255,41 @@ async function crawlEverywhere(query: string, candidate: any = null) {
     }, "allorigins", 1).catch(() => [] as any[]);
   }
 
-  // Tier 1 execution: comprehensive when candidate selected - scrape ALL sources for holistic view, not just chosen link
+  // Tier 1 execution: comprehensive branching - when candidate selected, search ALL involvements + personal, not just chosen link
   let serperResults: any[] = [];
   if (candidate && candidate.name) {
-    // Comprehensive: run 2-3 queries in parallel to get holistic view (professional + personal)
-    const queries = [query, `${candidate.name} ${candidate.company || ""}`.trim(), `${candidate.name} ${candidate.location || ""} ${candidate.title || ""}`.trim()].filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 2);
-    console.log("[Crawl] Comprehensive mode queries:", queries);
+    const baseQueries = [query];
+    // Branch 1: name + current company
+    if (candidate.company) baseQueries.push(`${candidate.name} ${candidate.company}`.trim());
+    // Branch 2: handle company rename (old -> new) - search both names to catch all involvements
+    const lineage = candidate.company ? resolveCompanyLineage(candidate.company) : null;
+    if (lineage && !candidate.company.toLowerCase().includes("levelshift")) {
+      baseQueries.push(`${candidate.name} LevelShift`);
+      baseQueries.push(`${candidate.company} renamed LevelShift`);
+    }
+    // Branch 3: personal / outside professional - holistic view
+    baseQueries.push(`${candidate.name} bio personal interests volunteer education`);
+    // Branch 4: contact-specific (for email/phone confidence)
+    baseQueries.push(`${candidate.name} email contact phone linkedin`);
+    const queries = baseQueries.filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 4);
+    console.log("[Crawl] Comprehensive branching queries:", queries);
     const serperSets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
     serperResults = ([] as any[]).concat(...serperSets);
-    // Deduplicate by URL
     const seenQ = new Set<string>();
     serperResults = serperResults.filter((r: any) => { if (!r.url || seenQ.has(r.url)) return false; seenQ.add(r.url); return true; });
-    console.log("[Crawl] Serper comprehensive", serperResults.length);
+    console.log("[Crawl] Serper comprehensive", serperResults.length, "from", queries.length, "queries");
   } else {
-    serperResults = await withRetry(() => fetchSerper(query), "serper-tier", 1).catch(() => [] as any[]);
+    // No candidate - single query plus personal expansion for holistic
+    const queries = [query, `${query} bio personal interests`].filter((q, i, arr) => q && arr.indexOf(q) === i);
+    if (queries.length > 1) {
+      const sets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
+      serperResults = ([] as any[]).concat(...sets);
+      const seenQ = new Set<string>();
+      serperResults = serperResults.filter((r: any) => { if (!r.url || seenQ.has(r.url)) return false; seenQ.add(r.url); return true; });
+      console.log("[Crawl] Serper holistic", serperResults.length);
+    } else {
+      serperResults = await withRetry(() => fetchSerper(query), "serper-tier", 1).catch(() => [] as any[]);
+    }
   }
   let tavilyResults: any[] = []; let braveResults: any[] = []; let serpApiResults: any[] = []; let bingApiResults: any[] = []; let wikiResults: any[] = [];
   if (serperResults.length < 3) {
@@ -273,18 +316,33 @@ async function crawlEverywhere(query: string, candidate: any = null) {
   const seen = new Set(); const web = mergedSearch.filter((r: any) => { if (!r.url || seen.has(r.url)) return false; seen.add(r.url); return true; }).slice(0, 12);
   console.log("[Crawl] Tier1 total", web.length, "sources:", [...new Set(web.map((w: any) => w.source))].join(","));
 
-  // ---------- Tier 2: DEEP SCRAPE (comprehensive - scrape ALL relevant pages, not just chosen link's domain) ----------
-  // When candidate selected, ensure their LinkedIn + top web results are all deep-scraped for holistic view
+  // ---------- Tier 2: DEEP SCRAPE (comprehensive, diverse - cover all org branches + personal) ----------
   const hash = query.split("").reduce((a: number, b: string) => a + b.charCodeAt(0), 0);
   const deepPages: any[] = [];
-  let topUrls = web.slice(0, 3).map((w: any) => w.url).filter(Boolean);
-  // If candidate provided with LinkedIn, ensure it's in deep scrape list even if not top-ranked
+  // Build diverse top URLs: deduplicate by domain to cover different org involvements, not just one company
+  const seenDomains = new Set<string>();
+  let topUrls: string[] = [];
+  for (const w of web) {
+    try {
+      const domain = new URL(w.url).hostname.replace("www.", "");
+      if (seenDomains.has(domain)) continue;
+      seenDomains.add(domain);
+      if (isUrlAllowed(w.url)) topUrls.push(w.url);
+      if (topUrls.length >= 4) break;
+    } catch {}
+  }
+  // Always include candidate's LinkedIn and LevelShift leadership if relevant for rename/holistic
   if (candidate?.linkedin && isUrlAllowed(candidate.linkedin) && !topUrls.includes(candidate.linkedin)) {
-    topUrls = [candidate.linkedin, ...topUrls].slice(0, 3);
-    console.log("[Deep] Added candidate LinkedIn to deep scrape");
+    topUrls = [candidate.linkedin, ...topUrls].slice(0, 4);
+    console.log("[Deep] Added candidate LinkedIn");
   }
   if (candidate?.url && isUrlAllowed(candidate.url) && !topUrls.includes(candidate.url)) {
-    topUrls = [...topUrls, candidate.url].slice(0, 3);
+    topUrls = [...topUrls, candidate.url].slice(0, 4);
+  }
+  // If old company lineage detected, also scrape LevelShift leadership for rename context
+  if (candidate?.company && resolveCompanyLineage(candidate.company)) {
+    const lsUrl = "https://levelshift.com/leadership";
+    if (isUrlAllowed(lsUrl) && !topUrls.includes(lsUrl)) topUrls.push(lsUrl);
   }
 
   async function deepScrapeScrapeDo(url: string) {
@@ -484,24 +542,34 @@ async function analyzeWithAI(query: string, scrapedData: any) {
   const contactsText = (scrapedData.contacts || []).map((c: any) => `${c.type}: ${c.value} (confidence ${c.confidence}%)`).join("\n") || "No contacts scraped";
   const enrich = scrapedData.enrichment ? `\n\nEnrichment:\n- Explorium: ${JSON.stringify(scrapedData.enrichment.explorium)?.slice(0, 600) || "none"}\n- Tinyfish: ${scrapedData.enrichment.tinyfish?.slice(0, 600) || "none"}\n- PublicAPIs: ${scrapedData.enrichment.publicApis?.slice(0, 400) || "none"}` : "";
 
-  const prompt = `You are a prospect intelligence analyst. Analyze "${query}" for sales intelligence.
+  const lineageNote = (() => {
+    const comp = scrapedData.web?.find((w: any) => resolveCompanyLineage(w.title + " " + w.snippet))?.title || "";
+    const resolved = resolveCompanyLineage(comp) || (candidate ? resolveCompanyLineage(candidate.company) : null);
+    return resolved ? `Company lineage note: ${candidate?.company || comp} is now ${resolved}. Treat old and new names as same entity.` : "";
+  })();
 
-FRESH WEB SEARCH (PRIMARY - ${scrapedData.web?.length || 0} results):
+  const prompt = `You are a prospect intelligence analyst doing HOLISTIC research - not just LinkedIn/company page. Analyze "${query}" for a full human understanding.
+
+FRESH WEB SEARCH (PRIMARY - ${scrapedData.web?.length || 0} results, diverse org branches):
 ${webResults || "No web results"}
 
-DEEP PAGE CONTENT (Firecrawl/Scrape.do/Jina - use for depth):
+DEEP PAGE CONTENT (Firecrawl/Scrape.do/Jina - includes LinkedIn + top diverse domains, 4 pages):
 ${deepContent || "No deep pages"}
 
-SCRAPED CONTACTS (with confidence - use as source for email/phone/linkedin, do not hallucinate others):
+SCRAPED CONTACTS (strict, with confidence - do NOT hallucinate phones/emails beyond this):
 ${contactsText}
+${lineageNote}
 ${enrich}
 
-CRITICAL RULES:
-- GROUND in web + deep content + contacts above. If results exist, EXTRACT exact titles/companies/locations. Do NOT say "no data" when results exist.
-- For contacts: use ONLY scraped contacts above. Set person.email to highest-confidence email, linkedin to LinkedIn URL. If no email scraped, set email null. Assign confidence per contact as given.
+CRITICAL HOLISTIC RULES:
+- COMPREHENSIVE BRANCHING: Person may have multiple org involvements (e.g., PreludeSys/DemandBlue -> LevelShift). Search shows diverse domains - you MUST synthesize ALL branches, not just the single chosen link's company. List all involvements in Career.
+- COMPANY RENAME: If you see old company (PreludeSys/DemandBlue/DemandDynamics) and LevelShift in results, explicitly note "Formerly X, now LevelShift (unified 2025)" in Company section.
+- HOLISTIC, BEYOND PROFESSIONAL: Extract personal/outside-professional info if present in deep pages (interests, volunteer, education, writing like books, community). If none found, state "No public personal information found" - do not invent.
+- GROUND in web + deep content + contacts above. Do NOT say "no data" when results exist.
+- For contacts: use ONLY scraped contacts above. Set person.email to highest-confidence email, linkedin to LinkedIn URL. If no email scraped, set email null. Do NOT invent phone numbers - only use phones with explicit contact context (confidence 70). If no phone scraped, set phone null.
 - confidenceScore: 85-95 strong public figure, 60-84 moderate (2-5 hits), 30-50 weak, 5-15 only if ZERO results.
-- If deep pages contain bio/details, use them to fill Career/Role/Company sections with specifics.
-- Include a "Contact" section with items for each scraped contact (label: Email/Phone/LinkedIn, value: address + confidence%).
+- Include "Contact" section with each scraped contact (label: Email (85%) / Phone (70%) / LinkedIn (95%), value: address).
+- Deduplicate: Career items must be distinct roles/orgs, not reworded duplicates. Each section item should add new info.
 
 Return ONLY valid JSON:
 {
@@ -512,9 +580,9 @@ Return ONLY valid JSON:
   "aiInsights": ["string", "string", "string"],
   "confidenceScore": number
 }
-If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate intelligently.
+If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate holistically.
 
-Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence.`;
+Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background.`;
 
   const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
   console.log(`[SearchHandler] AI done via ${provider}`);
