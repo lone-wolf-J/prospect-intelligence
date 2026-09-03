@@ -100,7 +100,7 @@ export async function searchProspectHandler(query: string, candidate: any = null
   const hasAiKey = !!(process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.TINYFISH_API_KEY);
   if (hasAiKey) {
     try {
-      aiAnalysis = await analyzeWithAI(query, crawlResults);
+      aiAnalysis = await analyzeWithAI(query, crawlResults, candidate);
       console.log("[SearchHandler] AI done");
     } catch (e: any) {
       aiError = e?.message || String(e);
@@ -265,10 +265,12 @@ async function crawlEverywhere(query: string, candidate: any = null) {
       baseQueries.push(`${candidate.name} LevelShift`);
       baseQueries.push(`${candidate.company} renamed LevelShift`);
     }
-    // Aggressive holistic: personal + social + contact branches
+    // Aggressive holistic: personal + social + contact + events branching
     baseQueries.push(`${candidate.name} bio personal interests volunteer education family`);
     baseQueries.push(`${candidate.name} twitter github instagram facebook linkedin social media`);
     baseQueries.push(`${candidate.name} email contact phone`);
+    baseQueries.push(`${candidate.name} event conference speaker timeline history career`);
+    baseQueries.push(`${candidate.name} award recognition speaking engagement`);
     const queries = baseQueries.filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 6);
     console.log("[Crawl] Aggressive holistic queries:", queries);
     const serperSets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
@@ -277,7 +279,7 @@ async function crawlEverywhere(query: string, candidate: any = null) {
     serperResults = serperResults.filter((r: any) => { if (!r.url || seenQ.has(r.url)) return false; seenQ.add(r.url); return true; });
     console.log("[Crawl] Serper aggressive", serperResults.length, "from", queries.length, "queries");
   } else {
-    const queries = [query, `${query} bio personal interests`, `${query} twitter github linkedin`, `${query} email contact`].filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 3);
+    const queries = [query, `${query} bio personal interests volunteer`, `${query} twitter github linkedin`, `${query} email contact`, `${query} event conference speaker timeline`].filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 4);
     const sets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
     serperResults = ([] as any[]).concat(...sets);
     const seenQ = new Set<string>();
@@ -545,7 +547,7 @@ async function analyzeWithTinyfish(query: string, scrapedData: any): Promise<any
   return JSON.parse(jsonMatch[0]);
 }
 
-async function analyzeWithAI(query: string, scrapedData: any) {
+async function analyzeWithAI(query: string, scrapedData: any, candidate: any = null) {
   const webResults = (scrapedData.web || []).slice(0, 8).map((r: any, i: number) => `${i + 1}. Title: ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet}`).join("\n\n");
   const deepContent = (scrapedData.deepPages || []).map((d: any, i: number) => `Deep Page ${i + 1} (${d.url}):\n${d.content?.slice(0, 1500)}`).join("\n\n");
   const contactsText = (scrapedData.contacts || []).map((c: any) => `${c.type}: ${c.value} (confidence ${c.confidence}%)`).join("\n") || "No contacts scraped";
@@ -559,10 +561,10 @@ async function analyzeWithAI(query: string, scrapedData: any) {
 
   const prompt = `You are a prospect intelligence analyst doing an AGGRESSIVE, HOLISTIC deep dive - get EVERYTHING you can find about this person, not just professional. Analyze "${query}".
 
-FRESH WEB SEARCH (PRIMARY - ${scrapedData.web?.length || 0} results, diverse org branches):
+FRESH WEB SEARCH (PRIMARY - ${scrapedData.web?.length || 0} results, diverse org branches including events/timeline):
 ${webResults || "No web results"}
 
-DEEP PAGE CONTENT (aggressive - 5 diverse pages including LinkedIn, company, personal, social):
+DEEP PAGE CONTENT (aggressive - 5 diverse pages including LinkedIn, company, personal, social, events):
 ${deepContent || "No deep pages"}
 
 SCRAPED CONTACTS + SOCIAL HANDLES (strict, with confidence - tag ALL social under contacts, do NOT hallucinate beyond this):
@@ -571,15 +573,17 @@ ${lineageNote}
 ${enrich}
 
 AGGRESSIVE HOLISTIC RULES:
-- GET EVERYTHING: Professional history (every org/branch, including old names before rename), personal interests, education, volunteer/community, writing/books/speaking, social handles (tag every Twitter/GitHub/Instagram/Facebook/Medium/YouTube under contacts), location, etc. Do NOT limit to LinkedIn/company page.
-- BRANCHING: Person may have multiple org involvements (e.g., PreludeSys/DemandBlue -> LevelShift). You MUST synthesize ALL branches found across diverse domains, not just the single chosen link's company. List all involvements in Career - deduplicate but keep distinct orgs.
+- GET EVERYTHING: Professional history (every org/branch, including old names before rename), personal interests, education, volunteer/community, writing/books/speaking, social handles (tag every Twitter/GitHub/Instagram/Facebook/Medium/YouTube under contacts), location, events/timeline where person was speaker/participant, awards, etc. Do NOT limit to LinkedIn/company page.
+- BRANCHING: Person may have multiple org involvements (e.g., PreludeSys/DemandBlue -> LevelShift). You MUST synthesize ALL branches found across diverse domains, not just the single chosen link's company. List all involvements in Career - deduplicate but keep distinct orgs. If old company renamed, note it.
 - COMPANY RENAME: If you see old company (PreludeSys/DemandBlue/DemandDynamics) and LevelShift, explicitly note "Formerly X, now LevelShift (unified 2025)" in Company section.
+- EVENTS & TIMELINE: Scrape as many events as possible where person was potential participant/speaker, past events attended, and build a timeline of career/events. Include specific event names, dates, roles.
 - SOCIAL HANDLES: Tag every scraped social URL under contacts with type (linkedin/twitter/github/instagram/facebook/medium/youtube) and confidence as given. Do NOT invent handles.
-- CONTACTS: use ONLY scraped contacts above. Set person.email to highest-confidence email, linkedin to LinkedIn URL, phone only if scraped with confidence 70 and near contact keyword. If no email/phone scraped, set null - do not invent. Show confidence% for each contact in Contact section.
+- CONTACTS: use ONLY scraped contacts above. Set person.email to highest-confidence email, linkedin to LinkedIn URL, phone only if scraped with confidence 70 and near contact keyword. If no email/phone scraped, set null - do not invent. Show confidence% for each contact in Contact section. If no contacts, state "No public email/phone found".
+- STRATEGIC INSIGHTS: Must clearly explain WHO this person is (role, company, professional focus, level of seniority) and WHAT WOULD INTEREST HIM (based on his interests, role, company priorities, tech stack, events, personal motivations). Insights must be specific, not generic like "AI transformation is tied to security".
 - HOLISTIC, BEYOND PROFESSIONAL: Extract personal/outside-professional info if present in deep pages (interests, volunteer, education, writing like books, community, family if public). If none found, state "No public personal information found" - do not invent.
 - GROUND in web + deep content + contacts above. Do NOT say "no data" when results exist.
 - confidenceScore: 85-95 strong public figure, 60-84 moderate (2-5 hits), 30-50 weak, 5-15 only if ZERO results.
-- Deduplicate: Career/Role items must be distinct, not reworded duplicates. Each section item must add new info.
+- Deduplicate: Career/Role items must be distinct, not reworded duplicates. Each section item must add new info. Avoid one-line vague sections.
 
 Return ONLY valid JSON:
 {
@@ -592,7 +596,7 @@ Return ONLY valid JSON:
 }
 If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically.
 
-Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background.`;
+Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
 
   const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
   console.log(`[SearchHandler] AI done via ${provider}`);
