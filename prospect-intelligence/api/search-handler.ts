@@ -544,8 +544,8 @@ async function analyzeWithAI(query: string, scrapedData: any) {
 
   const lineageNote = (() => {
     const comp = scrapedData.web?.find((w: any) => resolveCompanyLineage(w.title + " " + w.snippet))?.title || "";
-    const resolved = resolveCompanyLineage(comp) || (candidate ? resolveCompanyLineage(candidate.company) : null);
-    return resolved ? `Company lineage note: ${candidate?.company || comp} is now ${resolved}. Treat old and new names as same entity.` : "";
+    const resolved = resolveCompanyLineage(comp);
+    return resolved ? `Company lineage note: ${comp} is now ${resolved}. Treat old and new names as same entity (e.g., PreludeSys/DemandBlue -> LevelShift).` : "";
   })();
 
   const prompt = `You are a prospect intelligence analyst doing HOLISTIC research - not just LinkedIn/company page. Analyze "${query}" for a full human understanding.
