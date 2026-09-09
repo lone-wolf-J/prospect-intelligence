@@ -16,6 +16,7 @@ import Deals from "@/pages/Deals";
 import Submit from "@/pages/Submit";
 import Admin from "@/pages/Admin";
 import AdminLogin from "@/pages/AdminLogin";
+import Playground from "@/pages/Playground";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -80,6 +81,7 @@ export default function App() {
             <Route path="/github-intel" element={<GithubIntel />} />
             <Route path="/deals" element={<Deals />} />
             <Route path="/submit" element={<Submit />} />
+            <Route path="/playground" element={<Playground />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/admin/login" element={<AdminLogin />} />
             <Route path="*" element={

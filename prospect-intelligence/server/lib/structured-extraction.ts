@@ -33,7 +33,7 @@ export interface StructuredExtraction {
   };
   personal: {
     interests?: string[];
-    volunteer?: string[];
+    volunteerActivities?: string[];
     publications?: Array<{
       title: string;
       url?: string;
@@ -48,7 +48,7 @@ export interface StructuredExtraction {
       title: string;
       date?: string;
     }>;
-    volunteer?: Array<{
+    volunteerExperience?: Array<{
       organization: string;
       role?: string;
       date?: string;
@@ -207,8 +207,9 @@ export async function extractStructuredData(content: string, query: string): Pro
     });
     
     // Add metadata
+    const extracted = result as Record<string, any>;
     return {
-      ...result,
+      ...extracted,
       extractedAt: new Date().toISOString(),
       sourceLength: content.length,
       model: 'groq-llm'
@@ -223,7 +224,7 @@ function getEmptyExtraction() {
   return {
     personalInfo: { name: null, title: null, company: null, location: null, email: null, phone: null, linkedin: null, twitter: null, github: null, website: null },
     professional: { currentRole: null, company: null, industry: null, experience: [], education: [], skills: [] },
-    personal: { interests: [], volunteer: [], publications: [], speaking: [], awards: [], volunteer: [] },
+    personal: { interests: [], volunteerActivities: [], publications: [], speaking: [], awards: [], volunteerExperience: [] },
     company: { name: null, description: null, industry: null, size: null, location: null, website: null, founded: null, funding: null, products: [], technologies: [] },
     events: [],
     socialHandles: { linkedin: null, twitter: null, github: null, instagram: null, facebook: null, youtube: null, medium: null, mediumProfile: null },

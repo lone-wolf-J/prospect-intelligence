@@ -9,6 +9,7 @@ const LINKS = [
   { to: "/discover", label: "DISCOVER" },
   { to: "/llm-apis", label: "FREE LLM APIS" },
   { to: "/models", label: "MODELS" },
+  { to: "/playground", label: "PLAYGROUND" },
   { to: "/radar", label: "RADAR" },
   { to: "/stacks", label: "STACKS" },
   { to: "/save-money", label: "SAVE $$$$" },

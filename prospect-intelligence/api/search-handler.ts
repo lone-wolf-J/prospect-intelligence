@@ -1,7 +1,7 @@
 import { aiRegistry } from "../server/lib/ai-registry.js";
 import * as cheerio from "cheerio";
 import { isUrlAllowed, sanitizeForPrompt, validateQuery } from "./_security.js";
-import { getSearchProviders, SearchResult } from "../server/lib/search-providers.js";
+import { getSearchProviders, SearchResult, tierForUrl } from "../server/lib/search-providers.js";
 import { expandQueries, rankSources, extractFacts, deduplicateFacts, detectWhyNow, buildTimeline, calculateQuality } from "../server/lib/research-engine.js";
 import { extractStructuredData, extractEnhancedContacts, extractDeepPageContent } from "../server/lib/structured-extraction.js";
 
@@ -149,11 +149,53 @@ export async function searchProspectHandler(query: string, candidate: any = null
   if (hasAiKey) {
     try {
       aiAnalysis = await analyzeWithAI(query, crawlResults, candidate);
-      console.log("[SearchHandler] AI done");
+      console.log("[SearchHandler] AI done, confidence:", aiAnalysis?.confidenceScore);
+      
+      // If AI analysis returns low confidence, fall back to structured extraction data
+      if (aiAnalysis && aiAnalysis.confidenceScore !== undefined && aiAnalysis.confidenceScore < 30) {
+        console.log("[SearchHandler] AI confidence low (", aiAnalysis.confidenceScore, "), falling back to structured extraction");
+        const sd = (crawlResults as any).structuredData;
+        if (sd && Object.keys(sd).length > 0) {
+          console.log("[Fallback] AI confidence low, using structured extraction data");
+          aiAnalysis = {
+            person: sd.personalInfo || {},
+            company: sd.company || {},
+            sections: [],
+            aiInsights: [],
+            confidenceScore: 70,
+            researchQuality: (crawlResults as any).quality || 70,
+            citations: (crawlResults as any).facts?.slice(0, 8) || [],
+            whyNow: (crawlResults as any).whyNow || [],
+            timeline: (crawlResults as any).timeline || [],
+            contacts: (crawlResults as any).contacts || [],
+            structuredData: sd
+          };
+          aiError = "AI analysis confidence low; using structured extraction data";
+        }
+      }
     } catch (e: any) {
       aiError = e?.message || String(e);
       console.error("[SearchHandler] AI error:", aiError);
-      if (process.env.TINYFISH_API_KEY && aiError && aiError.includes("Groq")) {
+      
+      // Use structured data as fallback when AI fails
+      const sd = (crawlResults as any).structuredData;
+      if (sd && Object.keys(sd).length > 0) {
+        console.log("[Fallback] Using structured extraction data as AI analysis fallback");
+        aiAnalysis = {
+          person: sd.personalInfo || {},
+          company: sd.company || {},
+          sections: [],
+          aiInsights: [],
+          confidenceScore: 70,
+          researchQuality: (crawlResults as any).quality || 70,
+          citations: (crawlResults as any).facts?.slice(0, 8) || [],
+          whyNow: (crawlResults as any).whyNow || [],
+          timeline: (crawlResults as any).timeline || [],
+          contacts: (crawlResults as any).contacts || [],
+          structuredData: sd
+        };
+        aiError = "AI analysis failed; using structured extraction data";
+      } else if (process.env.TINYFISH_API_KEY && aiError && aiError.includes("Groq")) {
         try {
           console.log("[Fallback] Trying Tinyfish LLM...");
           aiAnalysis = await analyzeWithTinyfish(query, crawlResults);

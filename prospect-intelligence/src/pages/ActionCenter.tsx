@@ -164,8 +164,8 @@ export default function ActionCenter() {
       const title = selectedCase.person.title || "professional";
       const industry = (selectedCase.company.industry || "").toLowerCase();
       const isData = industry.includes("data") || industry.includes("tech") || title.toLowerCase().includes("data");
-      const isSalesforce = industry.includes("sales") || notes.toLowerCase().includes("salesforce") || title.toLowerCase().includes("sales");
-      const isDynamics = notes.toLowerCase().includes("dynamics") || title.toLowerCase().includes("dynamics");
+      const isSalesforce = industry.includes("sales") || pitchNotes.toLowerCase().includes("salesforce") || title.toLowerCase().includes("sales");
+      const isDynamics = pitchNotes.toLowerCase().includes("dynamics") || title.toLowerCase().includes("dynamics");
       const pillar = isData ? "Data Modernization with Microsoft Fabric/Power BI/Databricks" : isSalesforce ? "Salesforce + AI (Summit Partner)" : isDynamics ? "Dynamics 365 + AI" : "Enterprise Integration with Boomi/MuleSoft + Azure";
 
       const templates: Record<string, { subject: string; body: string }> = {

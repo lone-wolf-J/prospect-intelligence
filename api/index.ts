@@ -78,7 +78,47 @@ function isPrivateIp(hostname: string): boolean {
   return false;
 }
 
-const ALLOWED_FETCH_HOSTS = new Set(["api.github.com"]);
+const ALLOWED_FETCH_HOSTS = new Set([
+  "api.github.com",
+  "api.groq.com",
+  "api.cerebras.ai",
+  "generativelanguage.googleapis.com",
+  "api.mistral.ai",
+  "api.sambanova.ai",
+  "openrouter.ai",
+  "api.siliconflow.cn",
+  "integrate.api.nvidia.com",
+  "api.ollama.com",
+  "models.inference.ai.azure.com",
+  "api-inference.modelscope.cn",
+  "api.ovhcloud.com",
+  "api.cohere.com",
+  "api.x.ai",
+  "api.ai21.com",
+  "api.kilo.ai",
+  "api.chutes.ai",
+  "api.glhf.chat",
+  "api-inference.huggingface.co",
+  "api.studio.nebius.com",
+  "api.aionlabs.ai",
+  "api.opencodezen.com",
+  "api.cline.bot",
+  "dashscope.aliyuncs.com",
+  "api.llm7.io",
+  "api.deepseek.com",
+  "api.platform.minimaxi.com",
+  "api.lingyiwanwu.com",
+  "api.baichuan-ai.com",
+  "api.moonshot.cn",
+  "open.bigmodel.cn",
+  "api.together.xyz",
+  "api.fireworks.ai",
+  "api.deepinfra.com",
+  "api.novita.ai",
+  "api.nscale.com",
+  "aihubmix.com",
+  "api.replicate.com",
+]);
 async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
   const parsed = new URL(url);
   if (!ALLOWED_FETCH_HOSTS.has(parsed.hostname)) throw new Error("Blocked: fetch to disallowed host");
@@ -2059,6 +2099,143 @@ app.post("/api/admin/refresh-llm-providers", async (c) => {
     return c.json({ ok: false, error: e.message });
   }
   return c.json({ ok: false, error: "Failed to fetch OpenRouter models" });
+});
+
+// ─── Playground: Providers List ───
+app.get("/api/playground/providers", async (c) => {
+  if (!checkRateLimit("playground-providers", 30, 60000)) return c.json({ error: "rate_limited" }, 429);
+  const providers = LLM_PROVIDERS
+    .filter(p => p.openai_compatible && p.free_tier)
+    .map(p => ({
+      id: p.id,
+      name: p.name,
+      website: p.website,
+      api_endpoint: p.api_endpoint,
+      auth_type: p.auth_type,
+      models: p.models,
+      rate_limit_rpm: p.rate_limit_rpm,
+      notes: p.notes,
+    }));
+  return c.json({ providers });
+});
+
+// ─── Playground: Chat Completions Proxy (SSE streaming) ───
+app.post("/api/playground/chat", async (c) => {
+  if (!checkRateLimit("playground-chat", 20, 60000)) return c.json({ error: "rate_limited" }, 429);
+  const apiKey = c.req.header("X-Api-Key");
+  if (!apiKey) return c.json({ error: "Missing X-Api-Key header. Get a free API key from the provider." }, 400);
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
+
+  const { provider, model, messages, stream = true, temperature = 0.7, max_tokens = 2048 } = body;
+  if (!provider || !model || !messages?.length) {
+    return c.json({ error: "Missing required fields: provider, model, messages" }, 400);
+  }
+
+  const prov = LLM_PROVIDERS.find(p => p.id === provider);
+  if (!prov) return c.json({ error: `Unknown provider: ${provider}` }, 400);
+  if (!prov.openai_compatible) return c.json({ error: `${prov.name} is not OpenAI-compatible` }, 400);
+
+  let endpoint = prov.api_endpoint;
+  // Google uses a different path
+  if (provider === "google-ai-studio") {
+    endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
+  } else {
+    // Ensure endpoint ends with /chat/completions
+    const base = endpoint.replace(/\/+$/, "");
+    endpoint = base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
+  }
+
+  const payload = {
+    model,
+    messages,
+    stream,
+    temperature,
+    max_tokens,
+  };
+
+  try {
+    const upstream = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text().catch(() => "Unknown error");
+      return c.json({ error: `Provider returned ${upstream.status}: ${errText.slice(0, 500)}` }, upstream.status);
+    }
+
+    if (stream) {
+      // SSE passthrough
+      return new Response(upstream.body, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    } else {
+      const data = await upstream.json();
+      return c.json(data);
+    }
+  } catch (e: any) {
+    return c.json({ error: `Proxy error: ${e.message}` }, 502);
+  }
+});
+
+// ─── Playground: Image Generation Proxy ───
+app.post("/api/playground/image", async (c) => {
+  if (!checkRateLimit("playground-image", 10, 60000)) return c.json({ error: "rate_limited" }, 429);
+  const apiKey = c.req.header("X-Api-Key");
+  if (!apiKey) return c.json({ error: "Missing X-Api-Key header" }, 400);
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
+
+  const { provider, model, prompt } = body;
+  if (!provider || !model || !prompt) {
+    return c.json({ error: "Missing required fields: provider, model, prompt" }, 400);
+  }
+
+  const prov = LLM_PROVIDERS.find(p => p.id === provider);
+  if (!prov) return c.json({ error: `Unknown provider: ${provider}` }, 400);
+
+  // For OpenRouter image models, use /chat/completions with image response
+  if (provider === "openrouter-free" || prov.api_endpoint.includes("openrouter")) {
+    try {
+      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+          "HTTP-Referer": "https://free-intel.vercel.app",
+          "X-Title": "Free Intel Playground",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          stream: false,
+        }),
+      });
+      if (!upstream.ok) {
+        const errText = await upstream.text().catch(() => "Unknown error");
+        return c.json({ error: `Provider returned ${upstream.status}: ${errText.slice(0, 500)}` }, upstream.status);
+      }
+      const data = await upstream.json() as any;
+      return c.json(data);
+    } catch (e: any) {
+      return c.json({ error: `Proxy error: ${e.message}` }, 502);
+    }
+  }
+
+  return c.json({ error: "Image generation only supported via OpenRouter for now" }, 400);
 });
 
 // ═══════════════════════════════════════════════════════════════
