@@ -128,20 +128,11 @@ export async function searchProspectHandler(query: string, candidate: any = null
     console.log("[Research] Facts", dedupedFacts.length, "WhyNow", whyNowSignals.length, "Timeline", timeline.length, "Quality", qualityScore);
   } catch (e) { console.log("[Research] Fact extraction failed", e); }
 
-  // Structured extraction from deep pages using LLM (ScrapeGraphAI-like)
-  let structuredData: any = null;
-  try {
-    console.log("[StructuredExtraction] Starting structured extraction from deep pages");
-    const { extractStructuredData } = await import("../server/lib/structured-extraction.js");
-    const structuredData = await extractStructuredData(
-      JSON.stringify({ web: crawlResults.web, deepPages: crawlResults.deepPages }), 
-      query
-    );
-    (crawlResults as any).structuredData = structuredData;
-    console.log("[StructuredExtraction] Completed", Object.keys(structuredData).join(", "));
-  } catch (e) { 
-    console.log("[StructuredExtraction] Failed", e); 
-  }
+  // NOTE: Separate LLM structured-extraction call removed to preserve Groq TPM
+  // for the single synthesis call. Contacts/social come from deterministic regex
+  // (extractContactsAll), facts/timeline/whyNow from research-engine, and the
+  // synthesis prompt asks the LLM for structured sections + citations directly.
+  (crawlResults as any).structuredData = null;
 
   let aiAnalysis: any = null;
   let aiError: string | null = null;
@@ -151,78 +142,18 @@ export async function searchProspectHandler(query: string, candidate: any = null
       aiAnalysis = await analyzeWithAI(query, crawlResults, candidate);
       console.log("[SearchHandler] AI done, confidence:", aiAnalysis?.confidenceScore);
       
-      // If AI analysis returns low confidence, fall back to structured extraction data
+      // If AI analysis returns low confidence, fall back to deterministic evidence
       if (aiAnalysis && aiAnalysis.confidenceScore !== undefined && aiAnalysis.confidenceScore < 30) {
-        console.log("[SearchHandler] AI confidence low (", aiAnalysis.confidenceScore, "), falling back to structured extraction");
-        const sd = (crawlResults as any).structuredData;
-        if (sd && Object.keys(sd).length > 0) {
-          console.log("[Fallback] AI confidence low, using structured extraction data");
-          // Convert structured data to sections format
-          const sections = [];
-          if (sd.personalInfo) sections.push({ title: "Summary", items: [{ label: "Name", value: sd.personalInfo.name || "", confidence: sd.confidence?.personal || 0 }] });
-          if (sd.professional) sections.push({ title: "Career", items: sd.professional.experience?.map((e: any) => ({ label: e.role, value: e.company + " - " + (e.description || ""), confidence: sd.confidence?.professional || 0 })) || [] });
-          if (sd.personal) sections.push({ title: "Personal Background", items: [{ label: "Interests", value: sd.personal.interests?.join(", ") || "", confidence: sd.confidence?.personal || 0 }, { label: "Education", value: sd.personal.education?.map((e: any) => e.institution + ": " + (e.degree || "") + " " + (e.field || "")).join("; ") || "", confidence: sd.confidence?.personal || 0 }] });
-          if (sd.company) sections.push({ title: "Company", items: [{ label: "Name", value: sd.company.name || "", confidence: sd.confidence?.company || 0 }, { label: "Industry", value: sd.company.industry || "", confidence: sd.confidence?.company || 0 }, { label: "Size", value: sd.company.size || "", confidence: sd.confidence?.company || 0 }] });
-          if (sd.events && sd.events.length) sections.push({ title: "Events & Timeline", items: sd.events.map((e: any) => ({ label: e.name, value: e.date + " - " + (e.role || "") + " @ " + (e.location || ""), confidence: 70 })) });
-          if (sd.socialHandles) sections.push({ title: "Social Handles", items: Object.entries(sd.socialHandles).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: v, confidence: 85 })) });
-          if (sd.timeline && sd.timeline.length) sections.push({ title: "Timeline & Events", items: sd.timeline.map((t: any) => ({ label: t.date, value: t.event + " (" + t.type + ")", confidence: 80 })) });
-          if (sd.signals) sections.push({ title: "Signals", items: Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: Array.isArray(v) ? v.join(", ") : String(v), confidence: 75 })) });
-          
-          aiAnalysis = {
-            person: sd.personalInfo || {},
-            company: sd.company || {},
-            sections: sections,
-            aiInsights: sd.aiInsights || [],
-            confidenceScore: 70,
-            researchQuality: (crawlResults as any).quality || 70,
-            citations: (crawlResults as any).facts?.slice(0, 8) || [],
-            whyNow: sd.signals ? Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ event: k.charAt(0).toUpperCase() + k.slice(1), date: new Date().toISOString().split('T')[0], evidence: Array.isArray(v) ? v.join("; ") : String(v), source: "structured extraction", whyItMatters: `Signal detected: ${k}` })) : [],
-            timeline: sd.timeline || [],
-            contacts: (crawlResults as any).contacts || [],
-            structuredData: sd
-          };
-          aiError = "AI analysis confidence low; using structured extraction data";
-        }
+        console.log("[SearchHandler] AI confidence low (", aiAnalysis.confidenceScore, "), falling back to deterministic evidence");
+        aiAnalysis = buildDeterministicFallback(query, identity, crawlResults);
+        aiError = "AI analysis confidence low; using deterministic evidence";
       }
     } catch (e: any) {
       aiError = e?.message || String(e);
       console.error("[SearchHandler] AI error:", aiError);
-      
-      // Use structured data as fallback when AI fails
-      const sd = (crawlResults as any).structuredData;
-      if (sd && Object.keys(sd).length > 0) {
-        console.log("[Fallback] Using structured extraction data as AI analysis fallback");
-        // Convert structured data to sections format
-        const sections = [];
-        if (sd.personalInfo) sections.push({ title: "Summary", items: [{ label: "Name", value: sd.personalInfo.name || "", confidence: sd.confidence?.personal || 0 }] });
-        if (sd.professional) sections.push({ title: "Career", items: sd.professional.experience?.map((e: any) => ({ label: e.role, value: e.company + " - " + (e.description || ""), confidence: sd.confidence?.professional || 0 })) || [] });
-        if (sd.personal) sections.push({ title: "Personal Background", items: [{ label: "Interests", value: sd.personal.interests?.join(", ") || "", confidence: sd.confidence?.personal || 0 }, { label: "Education", value: sd.personal.education?.map((e: any) => e.institution + ": " + (e.degree || "") + " " + (e.field || "")).join("; ") || "", confidence: sd.confidence?.personal || 0 }] });
-        if (sd.company) sections.push({ title: "Company", items: [{ label: "Name", value: sd.company.name || "", confidence: sd.confidence?.company || 0 }, { label: "Industry", value: sd.company.industry || "", confidence: sd.confidence?.company || 0 }, { label: "Size", value: sd.company.size || "", confidence: sd.confidence?.company || 0 }] });
-        if (sd.events && sd.events.length) sections.push({ title: "Events & Timeline", items: sd.events.map((e: any) => ({ label: e.name, value: e.date + " - " + (e.role || "") + " @ " + (e.location || ""), confidence: 70 })) });
-        if (sd.socialHandles) sections.push({ title: "Social Handles", items: Object.entries(sd.socialHandles).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: v, confidence: 85 })) });
-        if (sd.timeline && sd.timeline.length) sections.push({ title: "Timeline & Events", items: sd.timeline.map((t: any) => ({ label: t.date, value: t.event + " (" + t.type + ")", confidence: 80 })) });
-        if (sd.signals) sections.push({ title: "Signals", items: Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: Array.isArray(v) ? v.join(", ") : String(v), confidence: 75 })) });
-        
-        aiAnalysis = {
-            person: sd.personalInfo || {},
-            company: sd.company || {},
-            sections: sections,
-            aiInsights: sd.aiInsights || [],
-            confidenceScore: 70,
-            researchQuality: (crawlResults as any).quality || 70,
-            citations: (crawlResults as any).facts?.slice(0, 8) || [],
-            whyNow: sd.signals ? Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ event: k.charAt(0).toUpperCase() + k.slice(1), date: new Date().toISOString().split('T')[0], evidence: Array.isArray(v) ? v.join("; ") : String(v), source: "structured extraction", whyItMatters: `Signal detected: ${k}` })) : [],
-            timeline: sd.timeline || [],
-            contacts: (crawlResults as any).contacts || [],
-            structuredData: sd
-          };
-          aiError = "AI analysis failed; using structured extraction data";
-      } else if (process.env.TINYFISH_API_KEY && aiError && aiError.includes("Groq")) {
-        try {
-          console.log("[Fallback] Trying Tinyfish LLM...");
-          aiAnalysis = await analyzeWithTinyfish(query, crawlResults);
-        } catch (e2: any) { console.log("[Fallback] Tinyfish also failed", (e2 as any).message); }
-      }
+      // Deterministic fallback (no second LLM call) so quota failures still return evidence
+      aiAnalysis = buildDeterministicFallback(query, identity, crawlResults);
+      aiError = "AI analysis failed; using deterministic evidence";
     }
   }
   const result = buildCase(query, crawlResults, aiAnalysis, hasAiKey, aiError);
@@ -232,6 +163,42 @@ export async function searchProspectHandler(query: string, candidate: any = null
     cache.delete(firstKey);
   }
   return result;
+}
+
+// Deterministic fallback: no LLM calls, built from evidence pipeline only
+function buildDeterministicFallback(query: string, identity: any, crawlResults: any) {
+  const web: any[] = crawlResults.web || [];
+  const facts: any[] = (crawlResults as any).facts || [];
+  const contacts: any[] = crawlResults.contacts || [];
+  const timeline: any[] = (crawlResults as any).timeline || [];
+  const whyNow: any[] = (crawlResults as any).whyNow || [];
+  const quality: number = (crawlResults as any).quality || 0;
+  const sections: any[] = [];
+  const topFacts = facts.slice(0, 6);
+  if (topFacts.length) {
+    sections.push({ title: "Summary", items: topFacts.slice(0, 3).map((f: any) => ({ label: f.claim.slice(0, 50), value: f.evidence.slice(0, 220), sourceUrl: f.sourceUrl, confidence: Math.round(f.confidence * 100) })) });
+  } else if (web.length) {
+    sections.push({ title: "Summary", items: web.slice(0, 3).map((w: any) => ({ label: (w.title || "").slice(0, 50), value: (w.snippet || "").slice(0, 220), sourceUrl: w.url, confidence: 60 })) });
+  }
+  if (timeline.length) {
+    sections.push({ title: "Timeline & Events", items: timeline.slice(0, 6).map((t: any) => ({ label: t.date, value: t.event, sourceUrl: t.source || null, confidence: 70 })) });
+  }
+  if (whyNow.length) {
+    sections.push({ title: "Signals", items: whyNow.slice(0, 3).map((w: any) => ({ label: w.event, value: `${w.evidence} — ${w.whyItMatters}`, sourceUrl: w.source || null, confidence: 70 })) });
+  }
+  return {
+    person: { name: identity?.name || query, title: identity?.title || "", company: identity?.company || "", location: identity?.location || "", email: contacts.find((c: any) => c.type === "email")?.value || null, phone: contacts.find((c: any) => c.type === "phone")?.value || null, linkedin: identity?.linkedinUrl || contacts.find((c: any) => c.type === "linkedin")?.value || "" },
+    company: { name: identity?.company || "", industry: "", size: "", revenue: null, founded: null, headquarters: identity?.location || "", website: "", description: "" },
+    sections,
+    aiInsights: [],
+    confidenceScore: 60,
+    researchQuality: quality,
+    citations: facts.slice(0, 8),
+    whyNow,
+    timeline,
+    contacts,
+    identity,
+  };
 }
 
 async function crawlEverywhere(query: string, candidate: any = null, identity: any = null) {
@@ -627,11 +594,10 @@ async function crawlEverywhere(query: string, candidate: any = null, identity: a
     return contacts;
   }
 
-  const webSnippets = web.map((w: any) => w.snippet).join(" ").slice(0, 1500);
-  const [explorium, tinyfish, publicApis, publicRepo] = await Promise.allSettled([fetchExplorium(query), fetchTinyfishEnrich(query, webSnippets), fetchPublicApis(), fetchPublicApisRepo(query)]);
+  const [publicApis, publicRepo] = await Promise.allSettled([fetchPublicApis(), fetchPublicApisRepo(query)]);
   const enrichVals = {
-    explorium: explorium.status === "fulfilled" ? explorium.value : null,
-    tinyfish: tinyfish.status === "fulfilled" ? tinyfish.value : null,
+    explorium: null,
+    tinyfish: null,
     publicApis: [publicApis.status === "fulfilled" ? publicApis.value : null, publicRepo.status === "fulfilled" ? publicRepo.value : null].filter(Boolean).join(" | "),
   };
 

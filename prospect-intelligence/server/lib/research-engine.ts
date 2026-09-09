@@ -43,7 +43,7 @@ export function resolveIdentity(query: string, candidate: any = null): Identity 
   const location = candidate?.location;
   // Heuristic: trailing company/org in raw query (e.g., "Satya Nadella Microsoft")
   if (!company) {
-    const knownOrgs = ["microsoft", "nvidia", "amd", "google", "alphabet", "ibm", "adobe", "tesla", "apple", "amazon", "meta", "intel", "oracle", "salesforce", "general motors", "girls who code", "stanford", "mit", "harvard", "openai", "anthropic", "levelshift", "preludesys", "demandblue"];
+    const knownOrgs = ["microsoft", "nvidia", "amd", "google", "alphabet", "ibm", "adobe", "tesla", "apple", "amazon", "meta", "intel", "oracle", "salesforce", "servicenow", "workday", "snowflake", "databricks", "palantir", "general motors", "ford", "toyota", "girls who code", "stanford", "mit", "harvard", "openai", "anthropic", "deepmind", "levelshift", "preludesys", "demandblue", "slack", "uber", "lyft", "airbnb", "spotify", "shopify", "canva", "stripe", "netflix", "disney", "nike", "walmart", "target", "costco", "delta", "united", "marriott", "hilton", "linkedin", "twitter", "facebook", "instagram", "youtube", "tiktok", "snapchat", "pinterest", "reddit", "zoom", "dropbox", "hubspot", "zendesk", "coinbase", "robinhood", "doordash", "instacart", "spacex", "deloitte", "accenture", "mckinsey", "goldman sachs", "jpmorgan", "cisco", "dell", "samsung", "sony", "siemens", "boeing", "fedex", "pfizer", "moderna"]; // trailing-company parse
     const lowerName = name.toLowerCase();
     for (const org of knownOrgs) {
       if (lowerName.endsWith(" " + org)) {
