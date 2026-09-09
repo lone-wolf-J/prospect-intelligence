@@ -198,14 +198,35 @@ CONTENT TO ANALYZE:
 `;
 
 export async function extractStructuredData(content: string, query: string): Promise<any> {
-  const prompt = EXTRACTION_PROMPT + content.slice(0, 15000);
-  
+  const prompt = EXTRACTION_PROMPT + content.slice(0, 8000);
+
+  // Prefer Tinyfish (separate quota) so Groq TPM is preserved for final synthesis
+  const tinyfishKey = process.env.TINYFISH_API_KEY;
+  if (tinyfishKey) {
+    try {
+      const nodeFetch = (await import("node-fetch")).default;
+      const res: any = await nodeFetch("https://api.tinyfish.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${tinyfishKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "tinyfish", messages: [{ role: "user", content: prompt }], temperature: 0.1, max_tokens: 2500 })
+      });
+      const data: any = await res.json();
+      const text = data.choices?.[0]?.message?.content || data.output || "";
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("Tinyfish no JSON");
+      const extracted = JSON.parse(jsonMatch[0]) as Record<string, any>;
+      return { ...extracted, extractedAt: new Date().toISOString(), sourceLength: content.length, model: 'tinyfish' };
+    } catch (error) {
+      console.error('[StructuredExtraction] Tinyfish failed, trying registry:', error);
+    }
+  }
+
   try {
-    const { result } = await aiRegistry.generateJSON(prompt, { 
-      temperature: 0.1, 
-      maxTokens: 4000 
+    const { result } = await aiRegistry.generateJSON(prompt, {
+      temperature: 0.1,
+      maxTokens: 2500
     });
-    
+
     // Add metadata
     const extracted = result as Record<string, any>;
     return {

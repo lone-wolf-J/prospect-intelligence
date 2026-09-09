@@ -373,8 +373,8 @@ async function crawlEverywhere(query: string, candidate: any = null, identity: a
   const providers = getSearchProviders();
   console.log("[Research] Providers", providers.map(p => p.name).join(","));
   const allResults: SearchResult[] = [];
-  // Budget: max 8 queries to control cost, 5 results each = up to 40 raw results
-  const queryBudget = expandedQueries.slice(0, 8);
+  // Budget: max 5 queries to control cost, 5 results each = up to 25 raw results
+  const queryBudget = expandedQueries.slice(0, 5);
   for (const q of queryBudget) {
     let gotForQuery = 0;
     for (const p of providers) {
@@ -510,16 +510,18 @@ async function crawlEverywhere(query: string, candidate: any = null, identity: a
     }, "zenrows", 1).catch(() => null);
   }
 
-  // Combine Tools: browser to get HTML, then parse with cheerio/BeautifulSoup for easier extraction
+  // Combine Tools: Jina (free) first for every page; paid browser only as fallback
   for (let i = 0; i < topUrls.length; i++) {
     const url = topUrls[i];
-    let content: string | null = null;
-    const choice = (hash + i) % 5;
-    if (choice === 0) content = await deepScrapeFirecrawl(url) || await deepScrapeScrapeDo(url) || await deepScrapeJina(url);
-    else if (choice === 1) content = await deepScrapeScrapeDo(url) || await deepScrapeFirecrawl(url) || await deepScrapeJina(url);
-    else if (choice === 2) content = await deepScrapeScrapingBee(url) || await deepScrapeJina(url);
-    else if (choice === 3) content = await deepScrapeZenRows(url) || await deepScrapeJina(url);
-    else content = await deepScrapeJina(url) || await deepScrapeScrapeDo(url) || await deepScrapeFirecrawl(url);
+    let content: string | null = await deepScrapeJina(url);
+    if (!content || content.length < 500) {
+      const choice = (hash + i) % 4;
+      if (choice === 0) content = await deepScrapeFirecrawl(url) || await deepScrapeScrapeDo(url);
+      else if (choice === 1) content = await deepScrapeScrapeDo(url) || await deepScrapeFirecrawl(url);
+      else if (choice === 2) content = await deepScrapeScrapingBee(url);
+      else content = await deepScrapeZenRows(url);
+      if (!content || content.length < 500) content = await deepScrapeJina(url);
+    }
     if (content) {
       // Parse with cheerio/BeautifulSoup for easier extraction (per webscraping.fyi)
       try {
@@ -659,8 +661,8 @@ async function analyzeWithTinyfish(query: string, scrapedData: any): Promise<any
 }
 
 async function analyzeWithAI(query: string, scrapedData: any, candidate: any = null) {
-  const webResults = (scrapedData.web || []).slice(0, 8).map((r: any, i: number) => `${i + 1}. Title: ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet} [Tier ${r.tier || 3}]`).join("\n\n");
-  const deepContent = (scrapedData.deepPages || []).map((d: any, i: number) => `Deep Page ${i + 1} (${d.url}):\n${d.content?.slice(0, 1500)}`).join("\n\n");
+  const webResults = (scrapedData.web || []).slice(0, 6).map((r: any, i: number) => `${i + 1}. Title: ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet} [Tier ${r.tier || 3}]`).join("\n\n");
+  const deepContent = (scrapedData.deepPages || []).slice(0, 4).map((d: any, i: number) => `Deep Page ${i + 1} (${d.url}):\n${d.content?.slice(0, 1200)}`).join("\n\n");
   const contactsText = (scrapedData.contacts || []).map((c: any) => `${c.type}: ${c.value} (confidence ${c.confidence}%)`).join("\n") || "No contacts scraped";
   const enrich = scrapedData.enrichment ? `\n\nEnrichment:\n- Explorium: ${JSON.stringify(scrapedData.enrichment.explorium)?.slice(0, 600) || "none"}\n- Tinyfish: ${scrapedData.enrichment.tinyfish?.slice(0, 600) || "none"}\n- PublicAPIs: ${scrapedData.enrichment.publicApis?.slice(0, 400) || "none"}` : "";
   const factsText = (scrapedData.facts || []).slice(0, 8).map((f: any, i: number) => `${i + 1}. CLAIM: ${f.claim}\n   EVIDENCE: ${f.evidence.slice(0, 120)}\n   SOURCE: ${f.sourceTitle} (${f.sourceUrl}) [Tier ${f.tier}, confidence ${(f.confidence * 100).toFixed(0)}%]`).join("\n\n") || "No structured facts";
@@ -726,7 +728,7 @@ If ZERO results, set title "Unknown - no public data found" and confidence 8. Ot
 
 Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
 
-  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
+  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3000 });
   console.log(`[SearchHandler] AI done via ${provider}`);
 
   // Ensure whyNow and timeline are present
@@ -756,6 +758,14 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
         ...sections
       ];
     }
+    const sd: any = (scrapedData as any).structuredData || {};
+    const derivedWhyNow = (aiAnalysis.whyNow && aiAnalysis.whyNow.length ? aiAnalysis.whyNow : null)
+      || (sd.whyNow && sd.whyNow.length ? sd.whyNow : null)
+      || ((scrapedData as any).whyNow && (scrapedData as any).whyNow.length ? (scrapedData as any).whyNow : null)
+      || (sd.signals ? Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ event: k.charAt(0).toUpperCase() + k.slice(1), date: new Date().toISOString().split('T')[0], evidence: Array.isArray(v) ? (v as any[]).join("; ") : String(v), source: "structured extraction", whyItMatters: `Signal detected: ${k}` })) : []);
+    const derivedTimeline = (aiAnalysis.timeline && aiAnalysis.timeline.length ? aiAnalysis.timeline : null)
+      || (sd.timeline && sd.timeline.length ? sd.timeline : null)
+      || ((scrapedData as any).timeline && (scrapedData as any).timeline.length ? (scrapedData as any).timeline : []);
     return {
       id, query, timestamp,
       person: { ...(aiAnalysis.person || { name: query, title: "Unknown - no public data found", company: "Unknown", linkedin: scrapedData.linkedin?.url || "", location: "Unknown" }), email: aiAnalysis.person?.email || contacts.find((c: any) => c.type === "email")?.value || null, phone: aiAnalysis.person?.phone || contacts.find((c: any) => c.type === "phone")?.value || null, linkedin: aiAnalysis.person?.linkedin || scrapedData.linkedin?.url || "" },
@@ -766,8 +776,8 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
       confidenceScore: aiAnalysis.confidenceScore ?? 8,
       researchQuality: aiAnalysis.researchQuality || (scrapedData as any).quality || 0,
       citations: aiAnalysis.citations || (scrapedData as any).facts?.slice(0, 8) || [],
-whyNow: aiAnalysis.whyNow || (scrapedData as any).structuredData?.whyNow || (scrapedData as any).whyNow || [],
-            timeline: aiAnalysis.timeline || (scrapedData as any).structuredData?.timeline || (scrapedData as any).timeline || [],
+      whyNow: derivedWhyNow,
+      timeline: derivedTimeline,
       identity: (scrapedData as any).identity || null,
       structuredData: (scrapedData as any).structuredData || null,
       savedToPipeline: false,

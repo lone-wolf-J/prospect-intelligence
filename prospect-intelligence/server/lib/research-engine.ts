@@ -36,23 +36,25 @@ export function resolveIdentity(query: string, candidate: any = null): Identity 
   if (candidate) {
     if (candidate.name) name = candidate.name;
     if (candidate.company) company = candidate.company;
-    if (candidate.title) company = company || candidate.title;
-    if (candidate.location) company = company || candidate.location;
     if (candidate.url && candidate.url.includes("linkedin.com")) linkedinUrl = candidate.url;
     if (candidate.linkedin) linkedinUrl = candidate.linkedin;
   }
-  // Heuristic: "John Smith Acme" -> last word(s) as company if query has 3+ words
-  const parts = name.split(/\s+/);
-  if (!company && parts.length >= 3) {
-    // Assume last part is company if we have no candidate
-    // e.g., "John Smith Acme" -> name "John Smith", company "Acme"
-    // This is weak, so low confidence
-  }
-
-  // Company/title/location from candidate or raw
-  if (!company && candidate?.company) company = candidate.company;
   const title = candidate?.title;
   const location = candidate?.location;
+  // Heuristic: trailing company/org in raw query (e.g., "Satya Nadella Microsoft")
+  if (!company) {
+    const knownOrgs = ["microsoft", "nvidia", "amd", "google", "alphabet", "ibm", "adobe", "tesla", "apple", "amazon", "meta", "intel", "oracle", "salesforce", "general motors", "girls who code", "stanford", "mit", "harvard", "openai", "anthropic", "levelshift", "preludesys", "demandblue"];
+    const lowerName = name.toLowerCase();
+    for (const org of knownOrgs) {
+      if (lowerName.endsWith(" " + org)) {
+        company = name.slice(name.length - org.length);
+        // Fix capitalization from raw
+        const idx = lowerName.lastIndexOf(" " + org);
+        name = name.slice(0, idx).trim();
+        break;
+      }
+    }
+  }
 
   const nameConf = name.split(/\s+/).length >= 2 ? 95 : 60;
   const companyConf = company ? 100 : 30;
@@ -76,31 +78,37 @@ export function expandQueries(identity: Identity): string[] {
   const t = identity.title || "";
   const queries: string[] = [];
 
-  // Person identity
+  // Person identity (highest value first)
   if (c) queries.push(`"${n}" "${c}"`);
   else queries.push(`"${n}"`);
 
-  // Professional
+  // Professional (role-specific first)
   if (c) {
-    queries.push(`"${n}" ${c} CEO`, `"${n}" ${c} executive`, `"${n}" ${c} leadership`, `"${n}" ${c} biography`);
+    queries.push(`"${n}" ${c} CEO`, `"${n}" ${c} executive`);
+  }
+
+  // Public writing (high-signal, cheap)
+  queries.push(`"${n}" interview`, `"${n}" podcast`);
+
+  // Company context (grounds role + why-now)
+  if (c) {
+    queries.push(`${c} recent news`, `${c} leadership`);
   }
 
   // Career
-  queries.push(`"${n}" previous company`, `"${n}" former`, `"${n}" career`);
+  queries.push(`"${n}" career`, `"${n}" previous company`);
 
-  // Public writing
-  queries.push(`"${n}" interview`, `"${n}" podcast`, `"${n}" article`, `"${n}" keynote`, `"${n}" conference`);
-
-  // Professional activity
-  queries.push(`"${n}" announcement`, `"${n}" partnership`, `"${n}" acquisition`, `"${n}" launch`);
-
-  // Company context
-  if (c) {
-    queries.push(`${c} recent news`, `${c} funding`, `${c} leadership`, `${c} hiring`, `${c} product launch`);
-  }
+  // More public writing / activity
+  queries.push(`"${n}" article`, `"${n}" conference`, `"${n}" announcement`);
 
   // Social
-  queries.push(`"${n}" LinkedIn`, `"${n}" GitHub`);
+  queries.push(`"${n}" LinkedIn`);
+
+  // Remaining professional depth
+  if (c) {
+    queries.push(`"${n}" ${c} leadership`, `"${n}" ${c} biography`);
+  }
+  queries.push(`"${n}" keynote`, `"${n}" partnership`);
 
   // Deduplicate and limit to 18
   const seen = new Set<string>();
