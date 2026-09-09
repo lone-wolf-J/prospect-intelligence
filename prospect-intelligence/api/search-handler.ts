@@ -176,8 +176,8 @@ export async function searchProspectHandler(query: string, candidate: any = null
             confidenceScore: 70,
             researchQuality: (crawlResults as any).quality || 70,
             citations: (crawlResults as any).facts?.slice(0, 8) || [],
-            whyNow: (crawlResults as any).whyNow || [],
-            timeline: (crawlResults as any).timeline || [],
+            whyNow: sd.signals ? Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ event: k.charAt(0).toUpperCase() + k.slice(1), date: new Date().toISOString().split('T')[0], evidence: Array.isArray(v) ? v.join("; ") : String(v), source: "structured extraction", whyItMatters: `Signal detected: ${k}` })) : [],
+            timeline: sd.timeline || [],
             contacts: (crawlResults as any).contacts || [],
             structuredData: sd
           };
@@ -204,19 +204,19 @@ export async function searchProspectHandler(query: string, candidate: any = null
         if (sd.signals) sections.push({ title: "Signals", items: Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: Array.isArray(v) ? v.join(", ") : String(v), confidence: 75 })) });
         
         aiAnalysis = {
-          person: sd.personalInfo || {},
-          company: sd.company || {},
-          sections: sections,
-          aiInsights: sd.aiInsights || [],
-          confidenceScore: 70,
-          researchQuality: (crawlResults as any).quality || 70,
-          citations: (crawlResults as any).facts?.slice(0, 8) || [],
-          whyNow: (crawlResults as any).whyNow || [],
-          timeline: (crawlResults as any).timeline || [],
-          contacts: (crawlResults as any).contacts || [],
-          structuredData: sd
-        };
-        aiError = "AI analysis failed; using structured extraction data";
+            person: sd.personalInfo || {},
+            company: sd.company || {},
+            sections: sections,
+            aiInsights: sd.aiInsights || [],
+            confidenceScore: 70,
+            researchQuality: (crawlResults as any).quality || 70,
+            citations: (crawlResults as any).facts?.slice(0, 8) || [],
+            whyNow: sd.signals ? Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ event: k.charAt(0).toUpperCase() + k.slice(1), date: new Date().toISOString().split('T')[0], evidence: Array.isArray(v) ? v.join("; ") : String(v), source: "structured extraction", whyItMatters: `Signal detected: ${k}` })) : [],
+            timeline: sd.timeline || [],
+            contacts: (crawlResults as any).contacts || [],
+            structuredData: sd
+          };
+          aiError = "AI analysis failed; using structured extraction data";
       } else if (process.env.TINYFISH_API_KEY && aiError && aiError.includes("Groq")) {
         try {
           console.log("[Fallback] Trying Tinyfish LLM...");
@@ -726,9 +726,20 @@ If ZERO results, set title "Unknown - no public data found" and confidence 8. Ot
 
 Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
 
-  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
-  console.log(`[SearchHandler] AI done via ${provider}`);
-  return result;
+  // Ensure whyNow and timeline are present
+  const res = result as { whyNow?: any[]; timeline: any[] } & Record<string, any>;
+  if (res && typeof res === 'object') {
+    if (!res.whyNow || !Array.isArray(res.whyNow) || res.whyNow.length === 0) {
+      res.whyNow = [];
+      console.log("[SearchHandler] AI result missing whyNow, defaulting to empty array");
+    }
+    if (!res.timeline || !Array.isArray(res.timeline) || res.timeline.length === 0) {
+      res.timeline = [];
+      console.log("[SearchHandler] AI result missing timeline, defaulting to empty array");
+    }
+  }
+  return res;
+}
 }
 
 function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: boolean, aiError: string | null) {
@@ -753,8 +764,8 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
       confidenceScore: aiAnalysis.confidenceScore ?? 8,
       researchQuality: aiAnalysis.researchQuality || (scrapedData as any).quality || 0,
       citations: aiAnalysis.citations || (scrapedData as any).facts?.slice(0, 8) || [],
-      whyNow: aiAnalysis.whyNow || (scrapedData as any).whyNow || [],
-      timeline: aiAnalysis.timeline || (scrapedData as any).timeline || [],
+whyNow: aiAnalysis.whyNow || (scrapedData as any).structuredData?.whyNow || (scrapedData as any).whyNow || [],
+            timeline: aiAnalysis.timeline || (scrapedData as any).structuredData?.timeline || (scrapedData as any).timeline || [],
       identity: (scrapedData as any).identity || null,
       structuredData: (scrapedData as any).structuredData || null,
       savedToPipeline: false,
