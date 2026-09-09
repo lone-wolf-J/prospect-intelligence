@@ -1,6 +1,9 @@
 import { aiRegistry } from "../server/lib/ai-registry.js";
 import * as cheerio from "cheerio";
 import { isUrlAllowed, sanitizeForPrompt, validateQuery } from "./_security.js";
+import { getSearchProviders, SearchResult } from "../server/lib/search-providers.js";
+import { expandQueries, rankSources, extractFacts, deduplicateFacts, detectWhyNow, buildTimeline, calculateQuality } from "../server/lib/research-engine.js";
+import { extractStructuredData, extractEnhancedContacts, extractDeepPageContent } from "../server/lib/structured-extraction.js";
 
 // Simple in-memory cache (persists for warm Vercel functions, ~7-day logical TTL via timestamp check)
 const cache = new Map<string, { data: any; ts: number }>();
@@ -83,17 +86,62 @@ function getConfigForUrl(url: string) {
 }
 
 export async function searchProspectHandler(query: string, candidate: any = null) {
-  // Input validation at handler level (defense in depth)
   query = validateQuery(query);
+  // Identity resolution (mandatory before collection)
+  const { resolveIdentity } = await import("../server/lib/research-engine.js");
+  const identity = resolveIdentity(query, candidate);
+  console.log("[Identity] Resolved", identity.name, identity.company, identity.confidence);
+
+  // If multiple people match (common name, low company confidence) -> ask for more identifier
+  if (identity.confidence.overall === "LOW" && !identity.company && !identity.linkedinUrl && !identity.emailDomain) {
+    const nameParts = identity.name.split(/\s+/).length;
+    if (query.toLowerCase().split(/\s+/).length <= 2 && nameParts <= 2) {
+      // For common names without company, we still proceed but flag low confidence
+      console.log("[Identity] Low confidence, will proceed but flag sparse");
+    }
+  }
+
   const normalized = (candidate ? `${query}::${candidate.company || ""}::${candidate.location || ""}` : query).toLowerCase().trim();
   const cached = cache.get(normalized);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
     console.log("[Cache] HIT for", query);
     return { ...cached.data, _cached: true };
   }
-  console.log("[SearchHandler] Starting crawl for:", query, candidate ? `with candidate ${candidate.name}` : "");
-  const crawlResults = await crawlEverywhere(query, candidate);
+  console.log("[SearchHandler] Starting crawl for:", query, candidate ? `with candidate ${candidate.name}` : "", "identity", identity.confidence.overall);
+  const crawlResults = await crawlEverywhere(query, candidate, identity);
   console.log("[SearchHandler] Crawl done. web:", (crawlResults.web as any[])?.length, "deep:", crawlResults.deepPages?.length);
+
+  // Fact extraction pipeline (per requirement 8) + store expanded queries for debug
+  try {
+    const { extractFacts, deduplicateFacts, detectWhyNow, buildTimeline, calculateQuality } = await import("../server/lib/research-engine.js");
+    const rawFacts = extractFacts(crawlResults.web || []);
+    const dedupedFacts = deduplicateFacts(rawFacts);
+    const whyNowSignals = detectWhyNow(dedupedFacts);
+    const timeline = buildTimeline(dedupedFacts);
+    const qualityScore = calculateQuality(identity, dedupedFacts, crawlResults.web || []);
+    (crawlResults as any).facts = dedupedFacts;
+    (crawlResults as any).whyNow = whyNowSignals;
+    (crawlResults as any).timeline = timeline;
+    (crawlResults as any).quality = qualityScore;
+    (crawlResults as any).identity = identity;
+    (crawlResults as any).expandedQueries = (globalThis as any).__expandedQueries || [];
+    console.log("[Research] Facts", dedupedFacts.length, "WhyNow", whyNowSignals.length, "Timeline", timeline.length, "Quality", qualityScore);
+  } catch (e) { console.log("[Research] Fact extraction failed", e); }
+
+  // Structured extraction from deep pages using LLM (ScrapeGraphAI-like)
+  let structuredData: any = null;
+  try {
+    console.log("[StructuredExtraction] Starting structured extraction from deep pages");
+    const { extractStructuredData } = await import("../server/lib/structured-extraction.js");
+    const structuredData = await extractStructuredData(
+      JSON.stringify({ web: crawlResults.web, deepPages: crawlResults.deepPages }), 
+      query
+    );
+    (crawlResults as any).structuredData = structuredData;
+    console.log("[StructuredExtraction] Completed", Object.keys(structuredData).join(", "));
+  } catch (e) { 
+    console.log("[StructuredExtraction] Failed", e); 
+  }
 
   let aiAnalysis: any = null;
   let aiError: string | null = null;
@@ -122,7 +170,7 @@ export async function searchProspectHandler(query: string, candidate: any = null
   return result;
 }
 
-async function crawlEverywhere(query: string, candidate: any = null) {
+async function crawlEverywhere(query: string, candidate: any = null, identity: any = null) {
   const fetchWithTimeout = async (url: string, opts: any = {}, ms = 12000) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
@@ -255,61 +303,60 @@ async function crawlEverywhere(query: string, candidate: any = null) {
     }, "allorigins", 1).catch(() => [] as any[]);
   }
 
-  // Tier 1 execution: AGGRESSIVE holistic - every branch, every org, every social, personal footprint
-  let serperResults: any[] = [];
-  if (candidate && candidate.name) {
-    const baseQueries = [query];
-    if (candidate.company) baseQueries.push(`${candidate.name} ${candidate.company}`.trim());
-    const lineage = candidate.company ? resolveCompanyLineage(candidate.company) : null;
-    if (lineage && !candidate.company.toLowerCase().includes("levelshift")) {
-      baseQueries.push(`${candidate.name} LevelShift`);
-      baseQueries.push(`${candidate.company} renamed LevelShift`);
+  // Tier 1: Research Engine - Query Expansion + Multi-Provider Discovery (per requirement 4 & 25)
+  const expandedQueries = expandQueries(identity);
+  console.log("[Research] Expanded", expandedQueries.length, expandedQueries.slice(0, 4));
+  const providers = getSearchProviders();
+  console.log("[Research] Providers", providers.map(p => p.name).join(","));
+  const allResults: SearchResult[] = [];
+  // Budget: max 8 queries to control cost, 5 results each = up to 40 raw results
+  const queryBudget = expandedQueries.slice(0, 8);
+  for (const q of queryBudget) {
+    let gotForQuery = 0;
+    for (const p of providers) {
+      try {
+        const res = await withRetry(() => p.search(q, { num: 5 }), `search:${p.name}`, 1).catch(() => [] as SearchResult[]);
+        if (res.length) {
+          // Assign tier if not already
+          const tiered = res.map((r: any) => ({ ...r, tier: r.tier || tierForUrl(r.url, p.tier) }));
+          allResults.push(...tiered);
+          gotForQuery += res.length;
+          if (gotForQuery >= 3) break; // Good results, skip fallback for this query
+        }
+      } catch {}
     }
-    // Aggressive holistic: personal + social + contact + events branching
-    baseQueries.push(`${candidate.name} bio personal interests volunteer education family`);
-    baseQueries.push(`${candidate.name} twitter github instagram facebook linkedin social media`);
-    baseQueries.push(`${candidate.name} email contact phone`);
-    baseQueries.push(`${candidate.name} event conference speaker timeline history career`);
-    baseQueries.push(`${candidate.name} award recognition speaking engagement`);
-    const queries = baseQueries.filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 6);
-    console.log("[Crawl] Aggressive holistic queries:", queries);
-    const serperSets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
-    serperResults = ([] as any[]).concat(...serperSets);
-    const seenQ = new Set<string>();
-    serperResults = serperResults.filter((r: any) => { if (!r.url || seenQ.has(r.url)) return false; seenQ.add(r.url); return true; });
-    console.log("[Crawl] Serper aggressive", serperResults.length, "from", queries.length, "queries");
-  } else {
-    const queries = [query, `${query} bio personal interests volunteer`, `${query} twitter github linkedin`, `${query} email contact`, `${query} event conference speaker timeline`].filter((q, i, arr) => q && arr.indexOf(q) === i).slice(0, 4);
-    const sets = await Promise.all(queries.map(q => withRetry(() => fetchSerper(q), "serper-tier", 1).catch(() => [] as any[])));
-    serperResults = ([] as any[]).concat(...sets);
-    const seenQ = new Set<string>();
-    serperResults = serperResults.filter((r: any) => { if (!r.url || seenQ.has(r.url)) return false; seenQ.add(r.url); return true; });
-    console.log("[Crawl] Serper holistic aggressive", serperResults.length);
+    // Small delay to respect rate limits
+    await new Promise(r => setTimeout(r, 150));
   }
-  let tavilyResults: any[] = []; let braveResults: any[] = []; let serpApiResults: any[] = []; let bingApiResults: any[] = []; let wikiResults: any[] = [];
-  if (serperResults.length < 3) {
-    console.log("[Crawl] Serper low, trying Tavily + Brave + SerpApi in parallel (HTTPX async)...");
-    const settled = await Promise.allSettled([fetchTavily(query), fetchBrave(query), fetchSerpApi(query), fetchBingApi(query), fetchWikipedia(query), fetchDuckDuckGoJsonApi(query)]);
-    tavilyResults = settled[0].status === "fulfilled" ? (settled[0].value as any[]) : [];
-    braveResults = settled[1].status === "fulfilled" ? (settled[1].value as any[]) : [];
-    serpApiResults = settled[2].status === "fulfilled" ? (settled[2].value as any[]) : [];
-    bingApiResults = settled[3].status === "fulfilled" ? (settled[3].value as any[]) : [];
-    wikiResults = settled[4].status === "fulfilled" ? (settled[4].value as any[]) : [];
-    const ddgJson = settled[5].status === "fulfilled" ? (settled[5].value as any[]) : [];
-    tavilyResults = [...tavilyResults, ...ddgJson];
-  } else {
-    console.log("[Crawl] Serper sufficient, skipping paid fallbacks to save quota");
-    wikiResults = await fetchWikipedia(query);
+  // Also run legacy comprehensive candidate queries for additional coverage (ensures old company rename etc.)
+  let legacyResults: any[] = [];
+  if (candidate && candidate.name) {
+    const extraQs: string[] = [];
+    if (candidate.company) {
+      const lineage = resolveCompanyLineage(candidate.company);
+      if (lineage) extraQs.push(`${candidate.name} ${lineage}`);
+    }
+    extraQs.push(`${identity.name} event conference speaker`, `${identity.name} timeline history career`);
+    for (const q of extraQs.slice(0, 2)) {
+      try {
+        const r = await withRetry(() => providers[0].search(q, { num: 5 }), `search:extra`, 1).catch(() => []);
+        allResults.push(...r);
+      } catch {}
+    }
   }
-
-  // Always try free HTML fallbacks with concurrency (per Core Tools: HTTPX supports sync/async + concurrency)
+  // Rank via research-engine (30% identity, 20% quality, 15% recency, 15% directness, 10% corroboration, 10% role)
+  const ranked = rankSources(allResults as SearchResult[], identity);
+  // Also include free HTML fallbacks as additional sources (zero cost)
   const [ddgHtml, allorig] = await Promise.allSettled([fetchDuckDuckGoHtml(query), fetchViaAllOrigins(query)]);
   const ddgHtmlRes = ddgHtml.status === "fulfilled" ? (ddgHtml.value as any[]) : [];
   const allorigRes = allorig.status === "fulfilled" ? (allorig.value as any[]) : [];
+  const freeResults = [...ddgHtmlRes, ...allorigRes].map((r: any) => ({ ...r, tier: tierForUrl(r.url, 3), relevance: 40 }));
+  const mergedSearch = [...ranked, ...freeResults];
+  const seen = new Set(); const web = mergedSearch.filter((r: any) => { if (!r.url || seen.has(r.url)) return false; seen.add(r.url); return true; }).slice(0, 15);
+  console.log("[Crawl] Tier1 total", web.length, "ranked top", web.slice(0, 3).map((w: any) => `${w.source}:${w.relevance}`).join(", "));
 
-  const mergedSearch = [...serperResults, ...tavilyResults, ...braveResults, ...serpApiResults, ...bingApiResults, ...wikiResults, ...ddgHtmlRes, ...allorigRes];
-  const seen = new Set(); const web = mergedSearch.filter((r: any) => { if (!r.url || seen.has(r.url)) return false; seen.add(r.url); return true; }).slice(0, 12);
-  console.log("[Crawl] Tier1 total", web.length, "sources:", [...new Set(web.map((w: any) => w.source))].join(","));
+  // For compatibility, keep legacy variable names
+  const serperResults: any[] = web; const tavilyResults: any[] = []; const braveResults: any[] = []; const serpApiResults: any[] = []; const bingApiResults: any[] = []; const wikiResults: any[] = [];
 
   // ---------- Tier 2: DEEP SCRAPE (aggressive, diverse - every org branch + personal footprint) ----------
   const hash = query.split("").reduce((a: number, b: string) => a + b.charCodeAt(0), 0);
@@ -548,10 +595,13 @@ async function analyzeWithTinyfish(query: string, scrapedData: any): Promise<any
 }
 
 async function analyzeWithAI(query: string, scrapedData: any, candidate: any = null) {
-  const webResults = (scrapedData.web || []).slice(0, 8).map((r: any, i: number) => `${i + 1}. Title: ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet}`).join("\n\n");
+  const webResults = (scrapedData.web || []).slice(0, 8).map((r: any, i: number) => `${i + 1}. Title: ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet} [Tier ${r.tier || 3}]`).join("\n\n");
   const deepContent = (scrapedData.deepPages || []).map((d: any, i: number) => `Deep Page ${i + 1} (${d.url}):\n${d.content?.slice(0, 1500)}`).join("\n\n");
   const contactsText = (scrapedData.contacts || []).map((c: any) => `${c.type}: ${c.value} (confidence ${c.confidence}%)`).join("\n") || "No contacts scraped";
   const enrich = scrapedData.enrichment ? `\n\nEnrichment:\n- Explorium: ${JSON.stringify(scrapedData.enrichment.explorium)?.slice(0, 600) || "none"}\n- Tinyfish: ${scrapedData.enrichment.tinyfish?.slice(0, 600) || "none"}\n- PublicAPIs: ${scrapedData.enrichment.publicApis?.slice(0, 400) || "none"}` : "";
+  const factsText = (scrapedData.facts || []).slice(0, 8).map((f: any, i: number) => `${i + 1}. CLAIM: ${f.claim}\n   EVIDENCE: ${f.evidence.slice(0, 120)}\n   SOURCE: ${f.sourceTitle} (${f.sourceUrl}) [Tier ${f.tier}, confidence ${(f.confidence * 100).toFixed(0)}%]`).join("\n\n") || "No structured facts";
+  const whyNowText = (scrapedData.whyNow || []).map((w: any) => `- ${w.event} (${w.date}) - ${w.whyItMatters} [${w.source}]`).join("\n") || "No why-now signals";
+  const timelineText = (scrapedData.timeline || []).map((t: any) => `${t.date}: ${t.event}`).join("\n") || "No timeline";
 
   const lineageNote = (() => {
     const comp = scrapedData.web?.find((w: any) => resolveCompanyLineage(w.title + " " + w.snippet))?.title || candidate?.company || "";
@@ -561,40 +611,54 @@ async function analyzeWithAI(query: string, scrapedData: any, candidate: any = n
 
   const prompt = `You are a prospect intelligence analyst doing an AGGRESSIVE, HOLISTIC deep dive - get EVERYTHING you can find about this person, not just professional. Analyze "${query}".
 
-FRESH WEB SEARCH (PRIMARY - ${scrapedData.web?.length || 0} results, diverse org branches including events/timeline):
+FRESH WEB SEARCH (ranked, ${scrapedData.web?.length || 0} results, diverse org branches including events/timeline):
 ${webResults || "No web results"}
 
-DEEP PAGE CONTENT (aggressive - 5 diverse pages including LinkedIn, company, personal, social, events):
+DEEP PAGE CONTENT (5 diverse pages):
 ${deepContent || "No deep pages"}
 
-SCRAPED CONTACTS + SOCIAL HANDLES (strict, with confidence - tag ALL social under contacts, do NOT hallucinate beyond this):
+STRUCTURED FACTS (extracted, deduplicated, with evidence and tier):
+${factsText}
+
+WHY NOW SIGNALS (recent events that make prospect relevant now):
+${whyNowText}
+
+TIMELINE (temporal):
+${timelineText}
+
+SCRAPED CONTACTS + SOCIAL HANDLES (strict, with confidence):
 ${contactsText}
 ${lineageNote}
 ${enrich}
 
 AGGRESSIVE HOLISTIC RULES:
-- GET EVERYTHING: Professional history (every org/branch, including old names before rename), personal interests, education, volunteer/community, writing/books/speaking, social handles (tag every Twitter/GitHub/Instagram/Facebook/Medium/YouTube under contacts), location, events/timeline where person was speaker/participant, awards, etc. Do NOT limit to LinkedIn/company page.
-- BRANCHING: Person may have multiple org involvements (e.g., PreludeSys/DemandBlue -> LevelShift). You MUST synthesize ALL branches found across diverse domains, not just the single chosen link's company. List all involvements in Career - deduplicate but keep distinct orgs. If old company renamed, note it.
-- COMPANY RENAME: If you see old company (PreludeSys/DemandBlue/DemandDynamics) and LevelShift, explicitly note "Formerly X, now LevelShift (unified 2025)" in Company section.
-- EVENTS & TIMELINE: Scrape as many events as possible where person was potential participant/speaker, past events attended, and build a timeline of career/events. Include specific event names, dates, roles.
-- SOCIAL HANDLES: Tag every scraped social URL under contacts with type (linkedin/twitter/github/instagram/facebook/medium/youtube) and confidence as given. Do NOT invent handles.
-- CONTACTS: use ONLY scraped contacts above. Set person.email to highest-confidence email, linkedin to LinkedIn URL, phone only if scraped with confidence 70 and near contact keyword. If no email/phone scraped, set null - do not invent. Show confidence% for each contact in Contact section. If no contacts, state "No public email/phone found".
-- STRATEGIC INSIGHTS: Must clearly explain WHO this person is (role, company, professional focus, level of seniority) and WHAT WOULD INTEREST HIM (based on his interests, role, company priorities, tech stack, events, personal motivations). Insights must be specific, not generic like "AI transformation is tied to security".
-- HOLISTIC, BEYOND PROFESSIONAL: Extract personal/outside-professional info if present in deep pages (interests, volunteer, education, writing like books, community, family if public). If none found, state "No public personal information found" - do not invent.
-- GROUND in web + deep content + contacts above. Do NOT say "no data" when results exist.
-- confidenceScore: 85-95 strong public figure, 60-84 moderate (2-5 hits), 30-50 weak, 5-15 only if ZERO results.
-- Deduplicate: Career/Role items must be distinct, not reworded duplicates. Each section item must add new info. Avoid one-line vague sections.
+- GET EVERYTHING: Professional history (every org/branch, including old names before rename), personal interests, education, volunteer/community, writing/books/speaking, social handles, location, events/timeline where person was speaker/participant, awards. Do NOT limit to LinkedIn.
+- BRANCHING: You MUST synthesize ALL branches found across diverse domains, not just single link's company. List all involvements in Career - deduplicate but keep distinct orgs. If old company renamed, note "Formerly X, now LevelShift (unified 2025)".
+- COMPANY RENAME: Explicitly note rename in Company section.
+- EVENTS & TIMELINE: Use Timeline above to build chronological career + event timeline. Include specific event names, dates, roles. Prioritize 30/90/180d recent signals.
+- SOCIAL HANDLES: Tag every scraped social URL under contacts with type and confidence. Do NOT invent.
+- CONTACTS: use ONLY scraped contacts above. Set person.email/phone/linkedin accordingly. If none, set null. Show confidence% in Contact section.
+- STRATEGIC INSIGHTS: Must clearly explain WHO this person is (role, company, professional focus, seniority, decision authority) and WHAT WOULD INTEREST HIM (based on his interests, role, company priorities, tech stack, events, personal motivations). Insights must be specific and evidence-backed, not generic.
+- HOLISTIC: Extract personal/outside-professional info if present (interests, volunteer, education, writing). If none, state "No public personal information found".
+- EVIDENCE: Every important claim must be grounded in a Fact (see structured FACTS above) with source, tier, confidence. Do NOT invent facts. Distinguish FACT vs INFERENCE vs HYPOTHESIS (label as Verified Fact / Strong Signal / Likely Implication / Research Hypothesis).
+- GROUND in web + deep + facts + contacts above.
+- confidenceScore: 85-95 strong public figure, 60-84 moderate, 30-50 weak, 5-15 only if ZERO results.
+- Deduplicate: Career/Role items distinct. Avoid vague one-liners. Use Timeline for temporal reasoning.
 
 Return ONLY valid JSON:
 {
   "person": {"name": "string", "title": "string", "company": "string", "location": "string", "email": "string|null", "linkedin": "string|null", "phone": "string|null"},
   "contacts": [{"type": "string", "value": "string", "confidence": number}],
   "company": {"name": "string", "industry": "string", "size": "string", "revenue": "string|null", "founded": "string|null", "headquarters": "string", "website": "string", "description": "string"},
-  "sections": [{"title": "string", "items": [{"label": "string", "value": "string"}]}],
+  "sections": [{"title": "string", "items": [{"label": "string", "value": "string", "sourceUrl": "string|null", "confidence": number} ]}],
   "aiInsights": ["string", "string", "string"],
-  "confidenceScore": number
+  "confidenceScore": number,
+  "researchQuality": number,
+  "citations": [{"claim": "string", "sourceTitle": "string", "sourceUrl": "string", "tier": number, "confidence": number}],
+  "whyNow": [{"event": "string", "date": "string", "evidence": "string", "source": "string", "whyItMatters": "string"}],
+  "timeline": [{"date": "string", "event": "string", "source": "string"}]
 }
-If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically.
+If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.
 
 Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
 
@@ -608,11 +672,10 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
   const timestamp = new Date().toISOString();
   if (aiAnalysis) {
     const contacts = aiAnalysis.contacts || scrapedData.contacts || [];
-    // Ensure contact section exists if we have contacts
     let sections = aiAnalysis.sections || [];
     if (contacts.length > 0 && !sections.find((s: any) => s.title === "Contact")) {
       sections = [
-        { title: "Contact", items: contacts.map((c: any) => ({ label: `${c.type} (${c.confidence}%)`, value: c.value })) },
+        { title: "Contact", items: contacts.map((c: any) => ({ label: `${c.type} (${c.confidence}%)`, value: c.value, sourceUrl: c.value.startsWith("http") ? c.value : null, confidence: c.confidence })) },
         ...sections
       ];
     }
@@ -624,9 +687,22 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
       sections,
       aiInsights: aiAnalysis.aiInsights || [],
       confidenceScore: aiAnalysis.confidenceScore ?? 8,
+      researchQuality: aiAnalysis.researchQuality || (scrapedData as any).quality || 0,
+      citations: aiAnalysis.citations || (scrapedData as any).facts?.slice(0, 8) || [],
+      whyNow: aiAnalysis.whyNow || (scrapedData as any).whyNow || [],
+      timeline: aiAnalysis.timeline || (scrapedData as any).timeline || [],
+      identity: (scrapedData as any).identity || null,
+      structuredData: (scrapedData as any).structuredData || null,
       savedToPipeline: false,
       _sources: (scrapedData.web || []).slice(0, 5),
       _deepPages: scrapedData.deepPages || [],
+      _debug: {
+        queriesExpanded: (scrapedData as any).expandedQueries || [],
+        sourcesDiscovered: (scrapedData.web || []).length,
+        sourcesUsed: (scrapedData.web || []).slice(0, 5).map((s: any) => ({ url: s.url, tier: s.tier, relevance: s.relevance })),
+        factsExtracted: (scrapedData as any).facts?.length || 0,
+        researchQuality: (scrapedData as any).quality || 0,
+      },
     };
   }
   const web = scrapedData.web || [];
