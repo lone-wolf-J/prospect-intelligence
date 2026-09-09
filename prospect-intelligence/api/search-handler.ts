@@ -724,8 +724,9 @@ Return ONLY valid JSON:
 }
 If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.
 
-Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
-
+const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
+  console.log(`[SearchHandler] AI done via ${provider}`);
+  
   // Ensure whyNow and timeline are present
   const res = result as { whyNow?: any[]; timeline: any[] } & Record<string, any>;
   if (res && typeof res === 'object') {
