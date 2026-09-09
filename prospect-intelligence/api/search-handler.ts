@@ -724,9 +724,11 @@ Return ONLY valid JSON:
 }
 If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.
 
-const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
+Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
+
+  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3500 });
   console.log(`[SearchHandler] AI done via ${provider}`);
-  
+
   // Ensure whyNow and timeline are present
   const res = result as { whyNow?: any[]; timeline: any[] } & Record<string, any>;
   if (res && typeof res === 'object') {
@@ -740,7 +742,6 @@ const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature
     }
   }
   return res;
-}
 }
 
 function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: boolean, aiError: string | null) {
@@ -793,9 +794,3 @@ whyNow: aiAnalysis.whyNow || (scrapedData as any).structuredData?.whyNow || (scr
     _sources: web.slice(0, 5),
   };
 }
-/ /   F o r c e   r e b u i l d   0 9 / 0 9 / 2 0 2 6   1 3 : 5 4 : 1 8  
- / /   F o r c e   r e b u i l d   0 9 / 0 9 / 2 0 2 6   1 3 : 5 8 : 1 7  
- / /   F o r c e   r e b u i l d   0 9 / 0 9 / 2 0 2 6   1 4 : 0 2 : 3 6  
- / /   F o r c e   r e b u i l d   0 9 / 0 9 / 2 0 2 6   1 4 : 0 7 : 3 5  
- / /   F o r c e   r e b u i l d   0 9 / 0 9 / 2 0 2 6   1 4 : 1 1 : 4 7  
- 
