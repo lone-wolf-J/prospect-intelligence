@@ -157,11 +157,22 @@ export async function searchProspectHandler(query: string, candidate: any = null
         const sd = (crawlResults as any).structuredData;
         if (sd && Object.keys(sd).length > 0) {
           console.log("[Fallback] AI confidence low, using structured extraction data");
+          // Convert structured data to sections format
+          const sections = [];
+          if (sd.personalInfo) sections.push({ title: "Summary", items: [{ label: "Name", value: sd.personalInfo.name || "", confidence: sd.confidence?.personal || 0 }] });
+          if (sd.professional) sections.push({ title: "Career", items: sd.professional.experience?.map((e: any) => ({ label: e.role, value: e.company + " - " + (e.description || ""), confidence: sd.confidence?.professional || 0 })) || [] });
+          if (sd.personal) sections.push({ title: "Personal Background", items: [{ label: "Interests", value: sd.personal.interests?.join(", ") || "", confidence: sd.confidence?.personal || 0 }, { label: "Education", value: sd.personal.education?.map((e: any) => e.institution + ": " + (e.degree || "") + " " + (e.field || "")).join("; ") || "", confidence: sd.confidence?.personal || 0 }] });
+          if (sd.company) sections.push({ title: "Company", items: [{ label: "Name", value: sd.company.name || "", confidence: sd.confidence?.company || 0 }, { label: "Industry", value: sd.company.industry || "", confidence: sd.confidence?.company || 0 }, { label: "Size", value: sd.company.size || "", confidence: sd.confidence?.company || 0 }] });
+          if (sd.events && sd.events.length) sections.push({ title: "Events & Timeline", items: sd.events.map((e: any) => ({ label: e.name, value: e.date + " - " + (e.role || "") + " @ " + (e.location || ""), confidence: 70 })) });
+          if (sd.socialHandles) sections.push({ title: "Social Handles", items: Object.entries(sd.socialHandles).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: v, confidence: 85 })) });
+          if (sd.timeline && sd.timeline.length) sections.push({ title: "Timeline & Events", items: sd.timeline.map((t: any) => ({ label: t.date, value: t.event + " (" + t.type + ")", confidence: 80 })) });
+          if (sd.signals) sections.push({ title: "Signals", items: Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: Array.isArray(v) ? v.join(", ") : String(v), confidence: 75 })) });
+          
           aiAnalysis = {
             person: sd.personalInfo || {},
             company: sd.company || {},
-            sections: [],
-            aiInsights: [],
+            sections: sections,
+            aiInsights: sd.aiInsights || [],
             confidenceScore: 70,
             researchQuality: (crawlResults as any).quality || 70,
             citations: (crawlResults as any).facts?.slice(0, 8) || [],
@@ -181,11 +192,22 @@ export async function searchProspectHandler(query: string, candidate: any = null
       const sd = (crawlResults as any).structuredData;
       if (sd && Object.keys(sd).length > 0) {
         console.log("[Fallback] Using structured extraction data as AI analysis fallback");
+        // Convert structured data to sections format
+        const sections = [];
+        if (sd.personalInfo) sections.push({ title: "Summary", items: [{ label: "Name", value: sd.personalInfo.name || "", confidence: sd.confidence?.personal || 0 }] });
+        if (sd.professional) sections.push({ title: "Career", items: sd.professional.experience?.map((e: any) => ({ label: e.role, value: e.company + " - " + (e.description || ""), confidence: sd.confidence?.professional || 0 })) || [] });
+        if (sd.personal) sections.push({ title: "Personal Background", items: [{ label: "Interests", value: sd.personal.interests?.join(", ") || "", confidence: sd.confidence?.personal || 0 }, { label: "Education", value: sd.personal.education?.map((e: any) => e.institution + ": " + (e.degree || "") + " " + (e.field || "")).join("; ") || "", confidence: sd.confidence?.personal || 0 }] });
+        if (sd.company) sections.push({ title: "Company", items: [{ label: "Name", value: sd.company.name || "", confidence: sd.confidence?.company || 0 }, { label: "Industry", value: sd.company.industry || "", confidence: sd.confidence?.company || 0 }, { label: "Size", value: sd.company.size || "", confidence: sd.confidence?.company || 0 }] });
+        if (sd.events && sd.events.length) sections.push({ title: "Events & Timeline", items: sd.events.map((e: any) => ({ label: e.name, value: e.date + " - " + (e.role || "") + " @ " + (e.location || ""), confidence: 70 })) });
+        if (sd.socialHandles) sections.push({ title: "Social Handles", items: Object.entries(sd.socialHandles).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: v, confidence: 85 })) });
+        if (sd.timeline && sd.timeline.length) sections.push({ title: "Timeline & Events", items: sd.timeline.map((t: any) => ({ label: t.date, value: t.event + " (" + t.type + ")", confidence: 80 })) });
+        if (sd.signals) sections.push({ title: "Signals", items: Object.entries(sd.signals).filter(([k, v]) => v).map(([k, v]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), value: Array.isArray(v) ? v.join(", ") : String(v), confidence: 75 })) });
+        
         aiAnalysis = {
           person: sd.personalInfo || {},
           company: sd.company || {},
-          sections: [],
-          aiInsights: [],
+          sections: sections,
+          aiInsights: sd.aiInsights || [],
           confidenceScore: 70,
           researchQuality: (crawlResults as any).quality || 70,
           citations: (crawlResults as any).facts?.slice(0, 8) || [],
