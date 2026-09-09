@@ -627,11 +627,11 @@ async function analyzeWithTinyfish(query: string, scrapedData: any): Promise<any
 }
 
 async function analyzeWithAI(query: string, scrapedData: any, candidate: any = null) {
-  const webResults = (scrapedData.web || []).slice(0, 6).map((r: any, i: number) => `${i + 1}. Title: ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet} [Tier ${r.tier || 3}]`).join("\n\n");
-  const deepContent = (scrapedData.deepPages || []).slice(0, 4).map((d: any, i: number) => `Deep Page ${i + 1} (${d.url}):\n${d.content?.slice(0, 1200)}`).join("\n\n");
+  const webResults = (scrapedData.web || []).slice(0, 5).map((r: any, i: number) => `${i + 1}. ${r.title} (${r.url}) — ${r.snippet} [T${r.tier || 3}]`).join("\n");
+  const deepContent = (scrapedData.deepPages || []).slice(0, 3).map((d: any, i: number) => `Page ${i + 1} (${d.url}): ${d.content?.slice(0, 1000)}`).join("\n\n");
   const contactsText = (scrapedData.contacts || []).map((c: any) => `${c.type}: ${c.value} (confidence ${c.confidence}%)`).join("\n") || "No contacts scraped";
-  const enrich = scrapedData.enrichment ? `\n\nEnrichment:\n- Explorium: ${JSON.stringify(scrapedData.enrichment.explorium)?.slice(0, 600) || "none"}\n- Tinyfish: ${scrapedData.enrichment.tinyfish?.slice(0, 600) || "none"}\n- PublicAPIs: ${scrapedData.enrichment.publicApis?.slice(0, 400) || "none"}` : "";
-  const factsText = (scrapedData.facts || []).slice(0, 8).map((f: any, i: number) => `${i + 1}. CLAIM: ${f.claim}\n   EVIDENCE: ${f.evidence.slice(0, 120)}\n   SOURCE: ${f.sourceTitle} (${f.sourceUrl}) [Tier ${f.tier}, confidence ${(f.confidence * 100).toFixed(0)}%]`).join("\n\n") || "No structured facts";
+  const enrich = scrapedData.enrichment?.publicApis ? `\n\nExtra context: ${scrapedData.enrichment.publicApis.slice(0, 300)}` : "";
+  const factsText = (scrapedData.facts || []).slice(0, 6).map((f: any, i: number) => `${i + 1}. ${f.claim} | ${f.evidence.slice(0, 100)} [${f.sourceUrl}, T${f.tier}]`).join("\n") || "No structured facts";
   const whyNowText = (scrapedData.whyNow || []).map((w: any) => `- ${w.event} (${w.date}) - ${w.whyItMatters} [${w.source}]`).join("\n") || "No why-now signals";
   const timelineText = (scrapedData.timeline || []).map((t: any) => `${t.date}: ${t.event}`).join("\n") || "No timeline";
 
@@ -694,7 +694,7 @@ If ZERO results, set title "Unknown - no public data found" and confidence 8. Ot
 
 Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
 
-  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 3000 });
+  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 2200 });
   console.log(`[SearchHandler] AI done via ${provider}`);
 
   // Ensure whyNow and timeline are present
