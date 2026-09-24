@@ -488,6 +488,21 @@ const WEB_SCRAPE_SOURCES: Array<{ name: string; url: string; category: string; s
   { name: "Alibaba Model Studio", url: "https://modelstudio.console.aliyun.com", category: "free-api", selectors: { title: "h3, .model-name", link: "a[href]", description: "p" } },
   { name: "Nebius Studio", url: "https://studio.nebius.com/models", category: "free-api", selectors: { title: "h3, .model-name", link: "a[href]", description: "p" } },
   { name: "Nscale models", url: "https://nscale.com/models", category: "free-api", selectors: { title: "h3, .model-name", link: "a[href]", description: "p" } },
+  // ============================================================
+  // KIE.AI — UNIFIED VIDEO / IMAGE / AUDIO / LLM API MARKETPLACE
+  // ============================================================
+  { name: "KIE Market - AI API models", url: "https://kie.ai/market", category: "model-catalog", selectors: { title: "h3, h4, .model-name", link: "a[href*='/market/']", description: "p" } },
+  { name: "KIE Pricing", url: "https://kie.ai/pricing", category: "pricing", selectors: { title: "h3, .plan-name", link: "a[href]", description: "p" } },
+  { name: "KIE Docs - quickstart", url: "https://docs.kie.ai/market/quickstart", category: "provider-update", selectors: { title: "h3, h4", link: "a[href]", description: "p" } },
+  // ============================================================
+  // FREEBUFF — 100% FREE CODING AGENT (AD-FUNDED)
+  // ============================================================
+  { name: "Freebuff - free coding agent", url: "https://freebuff.com/", category: "coding-agent", selectors: { title: "h3, .product-name", link: "a[href]", description: "p" } },
+  { name: "Freebuff Blog", url: "https://freebuff.com/blog", category: "provider-update", selectors: { title: "h3, .post-title", link: "a[href*='/blog/']", description: "p" } },
+  // ============================================================
+  // HUGGING FACE — INFERENCE PROVIDERS / PLAYGROUND
+  // ============================================================
+  { name: "HF Inference Playground", url: "https://huggingface.co/playground", category: "free-api", selectors: { title: "h3, .model-name", link: "a[href]", description: "p" } },
 ];
 
 export async function enqueue(db: any, kind: string, payload: any, priority = 5) {

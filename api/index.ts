@@ -98,6 +98,7 @@ const ALLOWED_FETCH_HOSTS = new Set([
   "api.kilo.ai",
   "api.chutes.ai",
   "api.glhf.chat",
+  "router.huggingface.co",
   "api-inference.huggingface.co",
   "api.studio.nebius.com",
   "api.aionlabs.ai",
@@ -1422,9 +1423,9 @@ const LLM_PROVIDERS: LLMProvider[] = [
   },
   {
     id: "huggingface-free-inference",
-    name: "HuggingFace Serverless Inference",
+    name: "HuggingFace Inference Providers",
     website: "https://huggingface.co",
-    api_endpoint: "https://api-inference.huggingface.co/models/",
+    api_endpoint: "https://router.huggingface.co/v1",
     auth_type: "HF token (free signup)",
     free_tier: true,
     credit_card_required: false,
@@ -1432,9 +1433,9 @@ const LLM_PROVIDERS: LLMProvider[] = [
     rate_limit_rpd: null,
     rate_limit_tpm: null,
     tokens_per_day: null,
-    models: ["All HF models (routes to Groq, Cerebras, Together, etc.)"],
-    openai_compatible: false,
-    notes: "Free rate-limited access to hosted models. Routes to partner backends. Cold starts on less popular models.",
+    models: ["openai/gpt-oss-120b", "deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V3", "black-forest-labs/FLUX.1-dev", "+ thousands via 18 partners"],
+    openai_compatible: true,
+    notes: "Unified OpenAI-compatible router (drop-in OpenAI baseURL) across 18 partners: Baseten, Cerebras, Cohere, DeepInfra, Fal AI, Featherless AI, Fireworks, Groq, HF Inference, Novita, Nscale, OVHcloud, Public AI, Replicate, Scaleway, Together, WaveSpeedAI, Z.ai. Generous free tier; extra credits for PRO/Team. Append :fastest or :cheapest to the model id for auto-routing. Legacy api-inference endpoint retired.",
     category: "permanent",
     last_checked: new Date().toISOString(),
   },
@@ -1471,6 +1472,24 @@ const LLM_PROVIDERS: LLMProvider[] = [
     models: ["Llama 3.3 70B", "DeepSeek V3", "Qwen 2.5"],
     openai_compatible: true,
     notes: "$1 free starter credits. 10 RPM without card. Not a permanent free tier.",
+    category: "trial-credits",
+    last_checked: new Date().toISOString(),
+  },
+  {
+    id: "kie-ai",
+    name: "KIE.ai (Video/Image/Audio/LLM API Marketplace)",
+    website: "https://kie.ai",
+    api_endpoint: "https://api.kie.ai/api/v1",
+    auth_type: "Bearer token (free signup)",
+    free_tier: false,
+    credit_card_required: false,
+    rate_limit_rpm: null,
+    rate_limit_rpd: null,
+    rate_limit_tpm: null,
+    tokens_per_day: null,
+    models: ["Veo 3.1 (video)", "Seedance 2.0 (video)", "Runway Aleph (video)", "Luma Modify (video)", "Midjourney (video+image)", "MiniMax H3 (video)", "FLUX Kontext (image)", "GPT Image / 4o (image)", "Suno v5.5/v4.5 (music)", "Claude/GPT/Gemini/DeepSeek (LLM)"],
+    openai_compatible: false,
+    notes: "Unified API marketplace for state-of-the-art video, image, audio & LLM models. 80 free credits for new users for testing. 1 credit ≈ $0.005 (~$0.40/Veo 3.1 Fast video, ~$2/Quality). Prices typically 30-50% below official/Replicate/Fal. Credits never expire. Task-based API (createTask + callbacks), not OpenAI-compatible.",
     category: "trial-credits",
     last_checked: new Date().toISOString(),
   },
@@ -2547,6 +2566,66 @@ app.get("/api/cron/refresh", async (c) => {
         results.hn = { ok: true, items: data.nbHits || 0, saved };
       }
     } catch (e: any) { results.hn = { ok: false, error: e.message }; }
+  }
+
+  if (type === "all" || type === "kie") {
+    // KIE.ai — unified video/image/audio/LLM API marketplace (curated, verified live)
+    try {
+      const entries = [
+        {
+          slug: "kie-ai-marketplace",
+          name: "KIE.ai — AI API Marketplace (Video/Image/Audio/LLM)",
+          desc: "Unified API for state-of-the-art generative models: Veo 3.1, Seedance 2.0, Runway Aleph, Luma Modify, Midjourney, MiniMax H3, FLUX Kontext, GPT Image, Suno music, plus Claude/GPT/Gemini/DeepSeek. 80 free credits for new users; ~30-50% below official pricing; credits never expire.",
+          url: "https://kie.ai/market",
+        },
+      ];
+      let saved = 0;
+      for (const e of entries) {
+        try {
+          const existing = await sql`SELECT id FROM resources WHERE slug = ${e.slug} LIMIT 1`;
+          if ((existing as any[]).length > 0) {
+            await sql`UPDATE resources SET description = ${e.desc}, last_verified = NOW() WHERE slug = ${e.slug}`;
+          } else {
+            await sql`INSERT INTO resources (slug, name, description, url, resource_type, category, free_score, origin, verification_status, created_at, last_verified)
+              VALUES (${e.slug}, ${e.name}, ${e.desc}, ${e.url}, 'api', 'AI', ${78}, 'curated-refresh', 'verified', NOW(), NOW())
+              ON CONFLICT (slug) DO NOTHING`;
+            saved++;
+          }
+        } catch {}
+      }
+      totalNew += saved;
+      results.kie = { ok: true, entries: entries.length, saved };
+    } catch (e: any) { results.kie = { ok: false, error: e.message }; }
+  }
+
+  if (type === "all" || type === "freebuff") {
+    // Freebuff — 100% free (ad-funded) coding agent: Desktop, CLI, Web, Cloud, Chat (curated, verified live)
+    try {
+      const entries = [
+        {
+          slug: "freebuff-coding-agent",
+          name: "Freebuff — Free Coding Agent (Desktop/CLI/Web/Cloud/Chat)",
+          desc: "100% free coding agent funded by ads — free alternative to Claude Code, Codex, Cursor, Lovable, Devin. $0/yr forever. 100 Freebucks/day for models incl. GLM 5.3 Flash, Solar Mini 4, Space Bunny Alpha, MiMo 2.6 Flash, DeepSeek V4.1 Flash, Muse Spark 1.2. CLI via npm install -g freebuff. No API key, no credit card. 472K+ developers.",
+          url: "https://freebuff.com/",
+        },
+      ];
+      let saved = 0;
+      for (const e of entries) {
+        try {
+          const existing = await sql`SELECT id FROM resources WHERE slug = ${e.slug} LIMIT 1`;
+          if ((existing as any[]).length > 0) {
+            await sql`UPDATE resources SET description = ${e.desc}, last_verified = NOW() WHERE slug = ${e.slug}`;
+          } else {
+            await sql`INSERT INTO resources (slug, name, description, url, resource_type, category, free_score, origin, verification_status, created_at, last_verified)
+              VALUES (${e.slug}, ${e.name}, ${e.desc}, ${e.url}, 'saas', 'AI', ${88}, 'curated-refresh', 'verified', NOW(), NOW())
+              ON CONFLICT (slug) DO NOTHING`;
+            saved++;
+          }
+        } catch {}
+      }
+      totalNew += saved;
+      results.freebuff = { ok: true, entries: entries.length, saved };
+    } catch (e: any) { results.freebuff = { ok: false, error: e.message }; }
   }
 
   if (type === "all" || type === "github-scan") {

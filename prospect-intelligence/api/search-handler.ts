@@ -377,11 +377,13 @@ async function crawlEverywhere(query: string, candidate: any = null, identity: a
   }
   // Rank via research-engine (30% identity, 20% quality, 15% recency, 15% directness, 10% corroboration, 10% role)
   const ranked = rankSources(allResults as SearchResult[], identity);
+  // Free no-key sources: run once (not per query) to preserve rate limits
+  const freeIntel = await fetchFreeIntelSources(identity.name, identity.company);
   // Also include free HTML fallbacks as additional sources (zero cost)
   const [ddgHtml, allorig] = await Promise.allSettled([fetchDuckDuckGoHtml(query), fetchViaAllOrigins(query)]);
   const ddgHtmlRes = ddgHtml.status === "fulfilled" ? (ddgHtml.value as any[]) : [];
   const allorigRes = allorig.status === "fulfilled" ? (allorig.value as any[]) : [];
-  const freeResults = [...ddgHtmlRes, ...allorigRes].map((r: any) => ({ ...r, tier: tierForUrl(r.url, 3), relevance: 40 }));
+  const freeResults = [...freeIntel, ...ddgHtmlRes, ...allorigRes].map((r: any) => ({ ...r, tier: r.tier || tierForUrl(r.url, 3), relevance: r.relevance || 40 }));
   const mergedSearch = [...ranked, ...freeResults];
   const seen = new Set(); const web = mergedSearch.filter((r: any) => { if (!r.url || seen.has(r.url)) return false; seen.add(r.url); return true; }).slice(0, 15);
   console.log("[Crawl] Tier1 total", web.length, "ranked top", web.slice(0, 3).map((w: any) => `${w.source}:${w.relevance}`).join(", "));

@@ -19,6 +19,8 @@ on:
           - github-scan
           - rss
           - freellm
+          - kie
+          - freebuff
 
 jobs:
   refresh:
