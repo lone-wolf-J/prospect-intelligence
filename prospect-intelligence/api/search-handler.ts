@@ -334,6 +334,98 @@ async function crawlEverywhere(query: string, candidate: any = null, identity: a
     }, "allorigins", 1).catch(() => [] as any[]);
   }
 
+  // Free no-key intel sources — run once per search (not per query) to preserve rate limits.
+  // GitHub (technical footprint), HN Algolia (mentions), Semantic Scholar (papers),
+  // SEC EDGAR (filings for public-company execs), Google Books (authored books),
+  // Mojeek HTML (independent index), Reddit JSON + StackExchange (community presence).
+  async function fetchFreeIntelSources(name: string, company?: string) {
+    const out: any[] = [];
+    const q = company ? `${name} ${company}` : name;
+    const get = async (url: string, headers: any = {}, ms = 6000) => {
+      try {
+        const res = await fetchWithTimeout(url, { headers: { "User-Agent": pickUA(), ...headers } }, ms);
+        return res;
+      } catch { return null; }
+    };
+    const tasks: Promise<any[]>[] = [
+      (async () => {
+        const res = await get(`https://api.github.com/search/users?q=${encodeURIComponent(name)}+in:fullname&per_page=3`, { "Accept": "application/vnd.github+json" });
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        return (data.items || []).slice(0, 3).map((u: any) => ({ title: `${u.login} (GitHub)`, snippet: `GitHub user: ${u.login}${u.type ? ` (${u.type})` : ""}`.slice(0, 200), url: u.html_url, source: "github", tier: 2 }));
+      })(),
+      (async () => {
+        const res = await get(`https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(name)}&tags=story&hitsPerPage=4`);
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        return (data.hits || []).slice(0, 4).map((h: any) => ({ title: h.title || "Hacker News mention", snippet: (h.title || "").slice(0, 200), url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`, source: "hackernews", tier: 2 }));
+      })(),
+      (async () => {
+        const res = await get(`https://api.semanticscholar.org/graph/v1/author/search?query=${encodeURIComponent(name)}&fields=name,affiliations,paperCount,citationCount,url&limit=3`);
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        return (data.data || []).slice(0, 3).map((a: any) => ({ title: `${a.name} (Semantic Scholar)`, snippet: `Papers: ${a.paperCount ?? "?"}, citations: ${a.citationCount ?? "?"}${a.affiliations?.length ? `, ${a.affiliations.map((x: any) => x.name).join("; ")}` : ""}`.slice(0, 250), url: a.url || `https://www.semanticscholar.org/search?q=${encodeURIComponent(name)}&sort=relevance`, source: "semanticscholar", tier: 2 }));
+      })(),
+      (async () => {
+        if (!company) return [];
+        const res = await get(`https://efts.sec.gov/LATEST/search?q=${encodeURIComponent('"' + company + '"')}`, { "Accept": "application/json", "Host": "efts.sec.gov" });
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        const hits = data.hits?.hits || data.hits || [];
+        return (Array.isArray(hits) ? hits : []).slice(0, 3).map((h: any) => {
+          const src = h._source || {};
+          return { title: `${company} — SEC filing (${src.form || "filing"})`, snippet: (src.doc || src.summary || "SEC EDGAR filing mention").toString().slice(0, 250), url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=${encodeURIComponent(company)}&type=&dateb=&owner=include&count=10`, source: "sec-edgar", tier: 1 };
+        });
+      })(),
+      (async () => {
+        const res = await get(`https://www.googleapis.com/books/v1/volumes?q=inauthor:${encodeURIComponent(name)}&maxResults=3`);
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        return (data.items || []).slice(0, 3).map((b: any) => ({ title: `${b.volumeInfo?.title || "Book"} — ${name}`, snippet: (b.volumeInfo?.description || `Authored by ${name}`).slice(0, 250), url: b.volumeInfo?.infoLink || `https://books.google.com/?q=${encodeURIComponent(name)}`, source: "google-books", tier: 2 }));
+      })(),
+      (async () => {
+        try {
+          const res = await fetchWithTimeout(`https://www.mojeek.com/search?q=${encodeURIComponent(q)}`, { headers: { "User-Agent": pickUA() } }, 8000);
+          const html = await res.text();
+          const $ = cheerio.load(html);
+          const results: any[] = [];
+          $("a.title").each((_: any, el: any) => {
+            if (results.length >= 6) return;
+            const href = $(el).attr("href") || "";
+            if (!href.startsWith("http")) return;
+            const title = $(el).text().trim();
+            if (title) results.push({ title, snippet: $(el).closest("li").find("p.desc, p.s").text().trim().slice(0, 250), url: href, source: "mojeek", tier: 3 });
+          });
+          console.log("[Crawl] Mojeek", results.length);
+          return results;
+        } catch { return []; }
+      })(),
+      (async () => {
+        const res = await get(`https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&limit=4&sort=relevance&restrict_sr=0`, {}, 6000);
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        const kids = data?.data?.children || [];
+        return kids.slice(0, 4).map((k: any) => ({ title: k.data?.title || "Reddit mention", snippet: (k.data?.selftext || "").slice(0, 200), url: `https://www.reddit.com${k.data?.permalink || ""}`, source: "reddit", tier: 3 }));
+      })(),
+      (async () => {
+        const res = await get(`https://api.stackexchange.com/2.3/users?inname=${encodeURIComponent(name)}&site=stackoverflow&pagesize=3&order=desc&sort=reputation`);
+        if (!res || !res.ok) return [];
+        const data: any = await res.json().catch(() => ({}));
+        return (data.items || []).slice(0, 3).map((u: any) => ({ title: `${u.display_name} (Stack Overflow)`, snippet: `Reputation: ${u.reputation ?? "?"}${u.location ? `, ${u.location}` : ""}`.slice(0, 200), url: u.link, source: "stackexchange", tier: 2 }));
+      })(),
+    ];
+    const settled = await Promise.allSettled(tasks);
+    for (const s of settled) {
+      if (s.status === "fulfilled" && Array.isArray(s.value)) {
+        for (const r of s.value) {
+          if (r.url && isUrlAllowed(r.url)) out.push(r);
+        }
+      }
+    }
+    console.log("[Crawl] FreeIntel", out.length, "sources:", [...new Set(out.map((r: any) => r.source))].join(","));
+    return out;
+  }
+
   // Tier 1: Research Engine - Query Expansion + Multi-Provider Discovery (per requirement 4 & 25)
   const expandedQueries = expandQueries(identity);
   console.log("[Research] Expanded", expandedQueries.length, expandedQueries.slice(0, 4));
