@@ -791,9 +791,13 @@ Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interes
   const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 2200 });
   console.log(`[SearchHandler] AI done via ${provider}`);
 
-  // Ensure whyNow and timeline are present
-  const res = result as { whyNow?: any[]; timeline: any[] } & Record<string, any>;
+  // Ensure confidence + whyNow + timeline are present (repair path can drop fields)
+  const res = result as { confidenceScore?: number | null; whyNow?: any[]; timeline: any[] } & Record<string, any>;
   if (res && typeof res === 'object') {
+    if (res.confidenceScore === undefined || res.confidenceScore === null) {
+      res.confidenceScore = 50;
+      console.log("[SearchHandler] AI result missing confidenceScore, defaulting to 50");
+    }
     if (!res.whyNow || !Array.isArray(res.whyNow) || res.whyNow.length === 0) {
       res.whyNow = [];
       console.log("[SearchHandler] AI result missing whyNow, defaulting to empty array");
