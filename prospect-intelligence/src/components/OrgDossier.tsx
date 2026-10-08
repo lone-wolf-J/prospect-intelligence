@@ -40,6 +40,25 @@ export interface OrgDecisionMaker {
   authorityScore: number;
   reachScore: number;
   reasoning: string;
+  department?: string;
+  departmentLabel?: string;
+  relevance?: number;
+}
+
+export interface OrgDepartmentGroup {
+  id: string;
+  label: string;
+  pillar: string;
+  relevance: number;
+  personCount: number;
+  recommended: { name: string; title: string; score: number } | null;
+}
+
+export interface OrgOffering {
+  departmentId: string;
+  label: string;
+  pillar: string;
+  reason: string;
 }
 
 export interface OrgCaseData {
@@ -58,9 +77,11 @@ export interface OrgCaseData {
     description: string;
   };
   decisionMakers: OrgDecisionMaker[];
+  offering?: OrgOffering;
+  departments?: OrgDepartmentGroup[];
   recommendation: {
     top: OrgDecisionMaker | null;
-    ranked: { rank: number; name: string; title: string; score: number; confidence: number; reasoning: string }[];
+    ranked: { rank: number; name: string; title: string; department?: string; score: number; confidence: number; reasoning: string }[];
   };
   confidenceScore: number;
   researchQuality: number;
@@ -134,11 +155,13 @@ export default function OrgDossier({ data, onSave }: { data: OrgCaseData; onSave
       <style>body{font-family:Inter,sans-serif;padding:32px;color:#0f172a;max-width:820px;margin:0 auto;} h1{font-size:26px;margin-bottom:4px;} h2{font-size:13px;text-transform:uppercase;letter-spacing:0.12em;color:#7c3aed;margin-top:26px;border-bottom:1px solid #e2e8f0;padding-bottom:8px;} .meta{color:#64748b;font-size:13px;margin-bottom:16px;} .dm{border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin:10px 0;} .dm .n{font-weight:700;font-size:15px;} .dm .t{color:#64748b;font-size:12px;margin-bottom:6px;} .dm .r{font-size:13px;line-height:1.6;} .label{font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;}</style>
       </head><body>
         <h1>${data.organization.name}</h1>
-        <div class="meta">${[data.organization.industry, data.organization.headquarters, data.organization.size].filter(Boolean).join(" · ")} | Overall confidence ${data.confidenceScore}%</div>
+        <div class="meta">${[data.organization.industry, data.organization.headquarters, data.organization.size].filter(Boolean).join(" · ")} | Overall confidence ${data.confidenceScore}%${data.offering ? ` | Target offering: ${data.offering.pillar}` : ""}</div>
         ${data.organization.description ? `<p style="font-size:13px;background:#f8fafc;padding:12px;border-radius:8px;border:1px solid #e2e8f0;">${data.organization.description}</p>` : ""}
-        ${top ? `<h2>Best person to reach</h2><div class="dm"><div class="n">${top.name} — ${top.title}</div><div class="r">${top.reasoning}</div><div class="r" style="margin-top:6px;"><span class="label">Contacts:</span> ${top.contacts.map(c => `${c.type}: ${c.value} (${c.confidence}%)`).join(" · ") || "none found"}</div></div>` : ""}
+        ${data.offering ? `<p style="font-size:13px;background:#f5f3ff;padding:12px;border-radius:8px;border:1px solid #ddd6fe;margin-top:8px;"><b>Auto-inferred offering:</b> ${data.offering.label} — ${data.offering.pillar}<br/>${data.offering.reason}</p>` : ""}
+        ${top ? `<h2>Best person to reach</h2><div class="dm"><div class="n">${top.name} — ${top.title}</div><div class="t">${top.departmentLabel || ""}</div><div class="r">${top.reasoning}</div><div class="r" style="margin-top:6px;"><span class="label">Contacts:</span> ${top.contacts.map(c => `${c.type}: ${c.value} (${c.confidence}%)`).join(" · ") || "none found"}</div></div>` : ""}
+        ${data.departments && data.departments.length ? `<h2>Buying committee by department</h2>${data.departments.map(d => `<div class="dm"><div class="n">${d.label} <span style="font-weight:400;color:#64748b;">(${d.personCount} person/people)</span></div><div class="t">Buys: ${d.pillar}</div>${d.recommended ? `<div class="r"><span class="label">Reach:</span> ${d.recommended.name} — ${d.recommended.title} (${d.recommended.score}/100)</div>` : ""}</div>`).join("")}` : ""}
         <h2>Key decision makers (${data.decisionMakers.length})</h2>
-        ${data.decisionMakers.map((dm, i) => `<div class="dm"><div class="n">#${i + 1} ${dm.name} — ${dm.title}</div><div class="t">Decision score ${dm.score}/100 · Confidence ${dm.confidence}% · ${dm.authority}</div><div class="r">${dm.reasoning}</div>${dm.contacts.length ? `<div class="r" style="margin-top:6px;"><span class="label">Contacts:</span> ${dm.contacts.map(c => `${c.type}: ${c.value} (${c.confidence}%)`).join(" · ")}</div>` : ""}</div>`).join("")}
+        ${data.decisionMakers.map((dm, i) => `<div class="dm"><div class="n">#${i + 1} ${dm.name} — ${dm.title}</div><div class="t">Decision score ${dm.score}/100 · Confidence ${dm.confidence}% · ${dm.departmentLabel || dm.authority}</div><div class="r">${dm.reasoning}</div>${dm.contacts.length ? `<div class="r" style="margin-top:6px;"><span class="label">Contacts:</span> ${dm.contacts.map(c => `${c.type}: ${c.value} (${c.confidence}%)`).join(" · ")}</div>` : ""}</div>`).join("")}
         <h2>AI insights</h2>${data.aiInsights.map((i, idx) => `<div style="margin:6px 0;font-size:13px;"><b>${idx + 1}.</b> ${i}</div>`).join("")}
         ${data.sections.map(s => `<h2>${s.title}</h2>${s.items.map(it => `<div style="margin:8px 0;"><div class="label">${it.label} ${it.confidence ? `· ${it.confidence}%` : ""}</div><div style="font-size:13px;line-height:1.6;">${it.value}</div></div>`).join("")}`).join("")}
         <hr style="margin-top:30px;border:none;border-top:1px solid #e2e8f0;"/><p style="font-size:11px;color:#94a3b8;text-align:center;">Generated by Prospect Intelligence · ${new Date().toLocaleString()} · Confidence ${data.confidenceScore}%</p>
@@ -184,7 +207,11 @@ export default function OrgDossier({ data, onSave }: { data: OrgCaseData; onSave
               </div>
               <p className="text-sm text-slate-600 dark:text-slate-300">
                 {data.decisionMakers.length} decision-maker{data.decisionMakers.length !== 1 ? "s" : ""} mapped · {data.organization.industry || "Industry n/a"}
+                {data.offering ? ` · Leading with: ${data.offering.pillar}` : ""}
               </p>
+              {data.offering && (
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{data.offering.reason}</p>
+              )}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -280,6 +307,45 @@ export default function OrgDossier({ data, onSave }: { data: OrgCaseData; onSave
         </div>
       )}
 
+      {/* Buying committee by department */}
+      {data.departments && data.departments.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+            <h3 className="font-sans text-sm font-bold tracking-wide text-slate-900 dark:text-white flex items-center gap-2" style={{ fontFamily: "Montserrat, sans-serif" }}>
+              <Target size={14} className="text-[hsl(280,85%,55%)]" />
+              Buying Committee by Department
+            </h3>
+            <span className="text-[10px] font-sans uppercase tracking-widest text-slate-400">{data.departments.length} department{data.departments.length !== 1 ? "s" : ""}</span>
+          </div>
+          <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {data.departments.map((dept, i) => (
+              <motion.div
+                key={dept.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.05 }}
+                className={`p-4 rounded-xl border ${i === 0 ? "bg-[hsl(280,85%,55%)/0.05] border-[hsl(280,85%,55%)]/30" : "bg-slate-50/60 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700"}`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-sm font-bold text-slate-900 dark:text-white">{dept.label}</span>
+                  <span className={`chip text-[9px] ${i === 0 ? "border-[hsl(280,85%,55%)]/40 text-[hsl(280,85%,55%)]" : "border-slate-200 dark:border-slate-700 text-slate-500"}`}>
+                    {dept.personCount} {dept.personCount === 1 ? "PERSON" : "PEOPLE"}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">Buys: {dept.pillar}</div>
+                {dept.recommended && (
+                  <div className="text-xs">
+                    <span className="font-semibold text-slate-700 dark:text-slate-200">Reach: {dept.recommended.name}</span>
+                    <span className="text-slate-500 dark:text-slate-400"> — {dept.recommended.title}</span>
+                    <span className="ml-1 font-bold text-[hsl(280,85%,55%)]">{dept.recommended.score}/100</span>
+                  </div>
+                )}
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* All decision makers */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
@@ -309,6 +375,9 @@ export default function OrgDossier({ data, onSave }: { data: OrgCaseData; onSave
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-slate-900 dark:text-white">{dm.name}</span>
                     <span className="text-sm text-slate-600 dark:text-slate-300">{dm.title}</span>
+                    {dm.departmentLabel && (
+                      <span className="chip border-[hsl(320,85%,55%)]/40 text-[hsl(320,85%,55%)] text-[9px]">{dm.departmentLabel}</span>
+                    )}
                     <span className="chip border-slate-200 dark:border-slate-700 text-slate-500 text-[9px]">{dm.seniority}</span>
                     {i === 0 && <span className="chip border-emerald-300 text-emerald-600 text-[9px]">TOP PICK</span>}
                   </div>

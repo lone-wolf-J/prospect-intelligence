@@ -18,12 +18,15 @@ for (const org of ORGS) {
     const secs = Math.round((Date.now() - t0) / 1000);
     const top = r.recommendation?.top;
     const dms = r.decisionMakers || [];
+    const depts = r.departments || [];
     const hasLinkedIn = dms.filter((d: any) => (d.contacts || []).some((c: any) => c.type === "linkedin")).length;
     const junk = dms.filter((d: any) => /^[a-z ]{1,3}$/i.test(d.name) || /share|intent|undefined|http/i.test(d.name)).length;
-    const ok = dms.length >= 3 && top && top.confidence >= 50 && junk === 0 && r.confidenceScore >= 40;
+    const execIsTop = top && top.department === "exec-sponsor" && depts.length >= 3 && dms.filter((d: any) => d.department !== "exec-sponsor").length >= 3;
+    const ok = dms.length >= 3 && top && top.confidence >= 50 && junk === 0 && r.confidenceScore >= 40 && !execIsTop;
     if (ok) pass++;
+    const deptSummary = depts.map((d: any) => `${d.id}(${d.personCount})`).join(" ");
     rows.push(
-      `${ok ? "PASS" : "FAIL"} | ${org.padEnd(11)} | dms ${String(dms.length).padStart(2)} | conf ${String(Math.round(r.confidenceScore)).padStart(2)} | qual ${String(Math.round(r.researchQuality)).padStart(2)} | li ${String(hasLinkedIn).padStart(2)} | junk ${junk} | ${secs}s | top ${top ? `${top.name} (${top.title}) c${top.confidence}` : "none"} | hq "${r.organization?.headquarters || ""}" | ind "${r.organization?.industry || ""}"`
+      `${ok ? "PASS" : "FAIL"} | ${org.padEnd(11)} | offer ${String(r.offering?.departmentId || "?").padEnd(13)} | depts ${depts.length} [${deptSummary}] | dms ${String(dms.length).padStart(2)} | conf ${String(Math.round(r.confidenceScore)).padStart(2)} | li ${String(hasLinkedIn).padStart(2)} | junk ${junk} | ${secs}s | top ${top ? `${top.name} (${top.title}) [${top.department}] c${top.confidence}` : "none"}`
     );
   } catch (e: any) {
     rows.push(`FAIL | ${org.padEnd(11)} | error: ${e?.message || e}`);

@@ -34,7 +34,26 @@ export interface DecisionMaker {
   score: number;
   authorityScore: number;
   reachScore: number;
+  relevance: number;
+  department: string;
+  departmentLabel: string;
   reasoning: string;
+}
+
+export interface DepartmentGroup {
+  id: string;
+  label: string;
+  pillar: string;
+  relevance: number;
+  personCount: number;
+  recommended: { name: string; title: string; score: number } | null;
+}
+
+export interface OfferingInference {
+  departmentId: string;
+  label: string;
+  pillar: string;
+  reason: string;
 }
 
 export interface OrgProfile {
@@ -55,9 +74,11 @@ export interface OrgResearchResult {
   timestamp: string;
   organization: OrgProfile;
   decisionMakers: DecisionMaker[];
+  offering: OfferingInference;
+  departments: DepartmentGroup[];
   recommendation: {
     top: DecisionMaker | null;
-    ranked: { rank: number; name: string; title: string; score: number; confidence: number; reasoning: string }[];
+    ranked: { rank: number; name: string; title: string; department: string; score: number; confidence: number; reasoning: string }[];
   };
   confidenceScore: number;
   researchQuality: number;
@@ -131,14 +152,15 @@ export function expandOrgQueries(org: { name: string; domain: string | null }): 
   const n = `"${org.name}"`;
   return [
     `${n} leadership team executives`,
-    `${n} CEO CTO CFO COO founders`,
-    `site:linkedin.com/in ${n} CEO OR founder OR "chief"`,
+    `site:linkedin.com/in ${n} CIO OR CTO OR "head of" OR "vice president" OR director`,
+    `${n} "chief information officer" OR "head of shared services" OR "head of data"`,
     `site:theorg.com ${n}`,
     `${n} executive team management`,
+    org.domain ? `${n} site:${org.domain} team` : `${n} about us team`,
+    `${n} CEO CTO CFO COO founders`,
     `${n} key people board of directors`,
     `${n} leadership press release appointment`,
     `${n} contact email phone address`,
-    org.domain ? `${n} site:${org.domain} team` : `${n} about us team`,
   ];
 }
 
@@ -165,6 +187,146 @@ export function classifyTitle(title: string): TitleRule | null {
     if (rule.pattern.test(t)) return rule;
   }
   return null;
+}
+
+// ---------- Department mapping (LevelShift offering -> buyer function) ----------
+
+export interface DepartmentDef {
+  id: string;
+  label: string;
+  pillar: string;
+  match: RegExp;
+  signals: RegExp;
+}
+
+// Match order: specific function patterns first, executive catch-all last.
+const DEPARTMENTS: DepartmentDef[] = [
+  {
+    id: "sales-crm",
+    label: "Sales, CRM & Revenue Operations",
+    pillar: "Salesforce Services (implementation, optimization, AI in CRM)",
+    match: /\b(salesforce|crm|revenue operations|revops|sales operations|sales ops|commercial operations|chief commercial|commercial officer|cpq|head of sales|sales director|vp of sales|vice president, sales|chief revenue|cro)\b/i,
+    signals: /\b(salesforce|crm|revops|sales operations|cpq|sales cloud|service cloud|commercial operations)\b/i,
+  },
+  {
+    id: "business-apps",
+    label: "Business Applications, ERP & Finance Systems",
+    pillar: "Dynamics 365 Services (ERP/CRM modernization with AI)",
+    match: /\b(dynamics\s?365|microsoft dynamics|erp|business applications?|finance systems?|financial systems|financial operations|netsuite|sap|head of erp|erp director)\b/i,
+    signals: /\b(dynamics\s?365|dynamics|erp|netsuite|sap|finance transformation|business central)\b/i,
+  },
+  {
+    id: "integration",
+    label: "Enterprise Integration & Architecture",
+    pillar: "Enterprise Integration (Boomi, MuleSoft, Azure integration with AI automation)",
+    match: /\b(integration|enterprise architect|architecture|architect|middleware|\bapi\b|boomi|mulesoft|systems integration|esb|head of architecture)\b/i,
+    signals: /\b(boomi|mulesoft|middleware|api integration|system integration|\besb\b|integration platform|ipaas)\b/i,
+  },
+  {
+    id: "ai-innovation",
+    label: "AI, Analytics & Innovation",
+    pillar: "AI Transformation (embedding AI across functions)",
+    match: /\b(chief ai|head of ai|artificial intelligence|machine learning|data science|innovation|digital transformation|chief digital|ai platform|ml ops|mlops|\bresearch\b)\b/i,
+    signals: /\b(artificial intelligence|machine learning|generative ai|ai[- ]first|ai transformation|ai strategy|llm)\b/i,
+  },
+  {
+    id: "hr-staffing",
+    label: "HR, Staffing & Talent",
+    pillar: "BPS / Staffing Services (workforce, talent operations)",
+    match: /\b(chro|chief people|chief human|human resources|\bhr\b|people operations|people ops|talent|staffing|workforce|recruiting|talent acquisition|chief learning|head of people)\b/i,
+    signals: /\b(staffing|workforce|recruiting|talent acquisition|contingent workforce|staff augmentation|peo)\b/i,
+  },
+  {
+    id: "shared-services",
+    label: "Shared Services, BPO & Operations",
+    pillar: "Business Process Services (ITES/BPO, managed operations)",
+    match: /\b(shared services|bpo|business process|ites|outsourcing|global capability|\bgcc\b|\bgbs\b|service delivery|business operations|operations center|global business services|coo|chief operating)\b/i,
+    signals: /\b(bpo|shared services|outsourcing|ites|business process services|contact center|managed services|back office)\b/i,
+  },
+  {
+    id: "procurement",
+    label: "Procurement & Vendor Management",
+    pillar: "Procurement / vendor approval (budget sign-off for outsourced services)",
+    match: /\b(procurement|strategic sourcing|sourcing|vendor (management|relations|selection)|purchasing|supply chain|head of procurement|vendor management office)\b/i,
+    signals: /\b(procurement|vendor management|strategic sourcing|purchase order|supplier management)\b/i,
+  },
+  {
+    id: "it-data",
+    label: "IT, Data & Cloud Infrastructure",
+    pillar: "Data Modernization (Microsoft Fabric, Azure, Power BI, Databricks)",
+    match: /\b(cio|chief information|chief technology|chief data|information technology|\bit\b|head of it|infrastructure|cloud|data(?!s\b)|analytics|platform engineering|enterprise applications?|engineering|devops|head of technology|technology director|data engineering|systems director)\b/i,
+    signals: /\b(azure|microsoft fabric|power bi|databricks|snowflake|data warehouse|data platform|cloud migration|cloud native|data engineering|analytics platform)\b/i,
+  },
+  {
+    id: "bu-leadership",
+    label: "Business Unit & Division Leadership",
+    pillar: "Division-specific engagement (BU heads approve local spend)",
+    match: /\b(business unit|\bbu\b|division|general manager|regional|country manager|managing director|head of|svp|evp|senior vice president|executive vice president|business head|vertical head)\b/i,
+    signals: /\b(business units?|divisions?|subsidiaries|business lines|profit center|verticals?)\b/i,
+  },
+  {
+    id: "exec-sponsor",
+    label: "Executive Sponsors (CEO / President / Chair)",
+    pillar: "Executive sponsorship & escalation (rarely the day-to-day buyer)",
+    match: /\b(founder|co[\s-]?founder|chief executive|ceo|president|chair|owner|proprietor)\b/i,
+    signals: /$^/,
+  },
+];
+
+const DEFAULT_PRIORITY = ["it-data", "sales-crm", "shared-services", "business-apps", "integration", "ai-innovation", "procurement", "hr-staffing", "bu-leadership", "exec-sponsor"];
+// Only these map to a service we actually sell — structural groups (BU heads, exec sponsors) and
+// approver roles (procurement) never drive the offering.
+const OFFERING_CANDIDATES = ["it-data", "sales-crm", "shared-services", "business-apps", "integration", "ai-innovation", "hr-staffing"];
+
+const DEPT_BY_ID = new Map(DEPARTMENTS.map(d => [d.id, d]));
+
+export function classifyDepartment(title: string, authorityScore: number): DepartmentDef {
+  for (const d of DEPARTMENTS) {
+    if (d.match.test(title || "")) return d;
+  }
+  return DEPT_BY_ID.get(authorityScore >= 91 ? "exec-sponsor" : "bu-leadership")!;
+}
+
+export function inferOffering(text: string, orgIndustry: string, description: string): OfferingInference {
+  const hay = (text || "").toLowerCase().slice(0, 400000);
+  const primary = `${orgIndustry || ""} ${description || ""}`.toLowerCase();
+  const counts: Record<string, number> = {};
+  for (const d of DEPARTMENTS) {
+    const re = new RegExp(d.signals.source, "gi");
+    const rest = hay.match(re)?.length || 0;
+    const head = primary.match(re)?.length || 0;
+    counts[d.id] = rest + head * 3;
+  }
+  const ranked = OFFERING_CANDIDATES
+    .map(id => DEPT_BY_ID.get(id)!)
+    .filter(Boolean)
+    .map(d => ({ d, count: counts[d.id] || 0, idx: (() => { const i = DEFAULT_PRIORITY.indexOf(d.id); return i === -1 ? 99 : i; })() }))
+    .sort((a, b) => b.count - a.count || a.idx - b.idx);
+  const best = ranked[0];
+  const useDefault = !best || best.count < 3;
+  const chosen = useDefault ? DEPT_BY_ID.get("it-data")! : best.d;
+  const evidence = ranked.filter(r => r.count >= 3).slice(0, 3).map(r => `${r.d.label} x${r.count}`);
+  const reason = useDefault
+    ? `No strong buying-signal found in public data — defaulting to our primary pillar: ${chosen.pillar}.`
+    : `Prospect signals in research: ${evidence.join(", ")}. ${chosen.label} is most likely to own this purchase.`;
+  return { departmentId: chosen.id, label: chosen.label, pillar: chosen.pillar, reason };
+}
+
+function departmentOrder(offering: OfferingInference): string[] {
+  const ids = DEPARTMENTS.map(d => d.id).filter(id => id !== offering.departmentId);
+  const withIdx = ids
+    .map(id => ({ id, idx: (() => { const i = DEFAULT_PRIORITY.indexOf(id); return i === -1 ? 99 : i; })() }))
+    .sort((a, b) => a.idx - b.idx);
+  return [offering.departmentId, ...withIdx.map(x => x.id)];
+}
+
+function computeRelevance(dm: DecisionMaker, deptIndex: number): number {
+  const deptWeight = Math.max(45, 100 - deptIndex * 6);
+  let rel = 0.42 * deptWeight + 0.28 * dm.authorityScore + 0.18 * dm.confidence + 0.12 * dm.reachScore;
+  if (dm.department === "exec-sponsor") rel -= 18;
+  if (/\b(former|previously with|retired|emeritus)\b/i.test(dm.title) || /^(?:ex|past|prior)\b/i.test(dm.title.trim())) rel = Math.min(rel, 55);
+  if (dm.confidence < 50) rel = Math.min(rel, 66);
+  return clamp(rel);
 }
 
 const NAME_TOKEN = `[A-Z][A-Za-z'’\\.\\-]{1,20}`;
@@ -204,11 +366,13 @@ function normalizePersonName(name: string): string {
   let s = (name || "").replace(/\s+/g, " ").replace(/[.,;:]+$/, "").trim();
   const comma = s.match(/^([A-Za-z'’\.\-]{2,25}),\s+([A-Z][A-Za-z'’\.\-]{1,20})$/);
   if (comma) s = `${comma[2]} ${comma[1]}`;
-  const words = s.split(" ");
+  let words = s.split(" ");
   const TITLEISH = /^(founder|co[- ]?founder|chief|executive|officer|president|chairwoman|chairman|chairperson|director|vice|senior|svp|evp|ceo|cto|cfo|coo|cmo|cro|cio|cpo|ciso|global|head|manager|partner|owner|exec|staff|department|corporation|inc|llc|ltd|company|holdings|president|internationally|globally)$/i;
+  let guard = 0;
+  while (words.length > 1 && TITLEISH.test(words[0]) && guard++ < 3) words.shift();
   const cut = words.findIndex((w, i) => i >= 2 && TITLEISH.test(w));
-  if (cut > 0) s = words.slice(0, cut).join(" ");
-  return s;
+  if (cut > 0) words = words.slice(0, cut);
+  return words.join(" ");
 }
 
 function pushHit(hits: PersonHit[], hit: PersonHit) {
@@ -586,7 +750,8 @@ function clamp(n: number, min = 0, max = 100): number {
 
 function scoreDecisionMaker(dm: DecisionMaker, orgSizeKnown: boolean): void {
   const sourceCount = dm.sourceUrls.length;
-  const evidenceScore = clamp(Math.min(100, sourceCount * 30) + (dm.linkedin ? 15 : 0));
+  const tierBoost = dm.evidence.some(e => e.tier === 1) ? 18 : dm.evidence.some(e => e.tier === 2) ? 10 : 0;
+  const evidenceScore = clamp(Math.min(100, sourceCount * 30 + tierBoost) + (dm.linkedin ? 15 : 0));
   const reachParts = [
     dm.linkedin ? 40 : 0,
     dm.contacts.some(c => c.type === "email" && !c.derived) ? 35 : 0,
@@ -597,6 +762,8 @@ function scoreDecisionMaker(dm: DecisionMaker, orgSizeKnown: boolean): void {
   dm.reachScore = clamp(reachParts.reduce((a, b) => a + b, 0));
   dm.authorityScore = clamp(classifyTitle(dm.title)?.score || 50);
   dm.confidence = clamp(evidenceScore * 0.5 + dm.authorityScore * 0.3 + dm.reachScore * 0.2);
+  const ownLinkedIn = !!(dm.linkedin || dm.sourceUrls.some(u => u.includes("linkedin.com/in/")));
+  if (dm.confidence < 52 && dm.authorityScore >= 85 && sourceCount >= 1 && ownLinkedIn) dm.confidence = 52;
 
   let score = dm.authorityScore * 0.45 + dm.reachScore * 0.35 + dm.confidence * 0.2;
   const t = dm.title.toLowerCase();
@@ -613,15 +780,15 @@ function scoreDecisionMaker(dm: DecisionMaker, orgSizeKnown: boolean): void {
   dm.score = clamp(score);
 }
 
-function buildReasoning(dm: DecisionMaker, orgName: string, rank: number): string {
+function buildReasoning(dm: DecisionMaker, orgName: string, rank: number, offering?: OfferingInference): string {
   const rule = classifyTitle(dm.title);
+  const dept = DEPT_BY_ID.get(dm.department);
   const domains = [...new Set(dm.sourceUrls.map(u => {
     try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; }
   }))];
   const corroboration = domains.length
     ? `Corroborated by ${dm.sourceUrls.length} source${dm.sourceUrls.length === 1 ? "" : "s"} (${domains.slice(0, 4).join(", ")})`
     : "Single-source mention";
-  const hasDirect = dm.contacts.some(c => c.type === "email" && !c.derived) || dm.linkedin;
   const direct = dm.linkedin && dm.contacts.some(c => c.type === "email")
     ? "Direct contact available: LinkedIn + email"
     : dm.linkedin
@@ -630,56 +797,69 @@ function buildReasoning(dm: DecisionMaker, orgName: string, rank: number): strin
         ? `Contact found: ${dm.contacts.map(c => c.type).join(", ")}`
         : "No direct contact found yet - use company channels";
   const role = rule ? rule.authority : "Executive-level authority";
+  const owns = dept && dm.department !== "exec-sponsor"
+    ? `Owns ${dept.label.toLowerCase()} - the team that evaluates ${dept.pillar.toLowerCase()}`
+    : dept
+      ? `Senior sponsor in ${dept.label.toLowerCase()} - escalation path, not the day-to-day buyer`
+      : `Function owner (${dm.departmentLabel})`;
   const placement = rank === 1
-    ? "Top pick: strongest balance of decision authority and verified reachability."
-    : `Ranked #${rank} - ${dm.score >= 65 ? "strong alternative with good reachability" : dm.score >= 45 ? "useful secondary contact" : "lower-priority contact"}.`;
-  return `${dm.title} at ${orgName} - ${role}. ${corroboration}. ${direct}. ${placement}`;
+    ? `Top pick for ${offering ? offering.pillar : "our offering"}: this role controls that purchase at ${orgName}.`
+    : `Ranked #${rank} in ${dm.departmentLabel}.`;
+  return `${dm.title} at ${orgName} - ${role}. ${owns}. ${corroboration}. ${direct}. ${placement}`;
 }
 
-function applyAuthorityBands(dm: DecisionMaker): number {
-  if (/\b(former|previously|retired|emeritus)\b/i.test(dm.title)) return clamp(Math.min(dm.score, 70));
-  if (dm.confidence < 50 && dm.sourceUrls.length < 2) return clamp(Math.min(dm.score, 70));
-  const a = dm.authorityScore || classifyTitle(dm.title)?.score || 50;
-  if (a >= 96) return clamp(Math.max(dm.score, 86));
-  if (a >= 91) return clamp(Math.min(Math.max(dm.score, 74), 84));
-  if (a >= 85) return clamp(Math.min(dm.score, 78));
-  if (a >= 75) return clamp(Math.min(dm.score, 74));
-  return clamp(Math.min(dm.score, 65));
-}
-
-function rankDecisionMakers(dms: DecisionMaker[]): DecisionMaker[] {
+function rankDecisionMakers(dms: DecisionMaker[], order: string[]): DecisionMaker[] {
+  const idxOf = new Map(order.map((id, i) => [id, i]));
   return dms
-    .map(dm => ({ ...dm, score: applyAuthorityBands(dm) }))
-    .sort((a, b) => b.score - a.score || b.confidence - a.confidence || (b.authorityScore || 0) - (a.authorityScore || 0));
+    .map(dm => {
+      const dept = classifyDepartment(dm.title, dm.authorityScore);
+      dm.department = dept.id;
+      dm.departmentLabel = dept.label;
+      dm.relevance = computeRelevance(dm, idxOf.get(dept.id) ?? order.length - 1);
+      dm.score = dm.relevance;
+      return dm;
+    })
+    .sort((a, b) => b.relevance - a.relevance || b.confidence - a.confidence || b.authorityScore - a.authorityScore);
+}
+
+function capDepartments(dms: DecisionMaker[]): DecisionMaker[] {
+  const limits: Record<string, number> = { "exec-sponsor": 4 };
+  const seen = new Map<string, number>();
+  return dms.filter(dm => {
+    const c = (seen.get(dm.department) || 0) + 1;
+    seen.set(dm.department, c);
+    return c <= (limits[dm.department] ?? 5);
+  });
 }
 
 // ---------- AI refinement ----------
 
-async function refineWithAI(orgName: string, dms: DecisionMaker[]): Promise<{ decisionMakers: DecisionMaker[]; insights: string[] } | null> {
+async function refineWithAI(orgName: string, dms: DecisionMaker[], offering: OfferingInference): Promise<{ decisionMakers: DecisionMaker[]; insights: string[] } | null> {
   if (!dms.length) return null;
   const hasKey = !!(process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY);
   if (!hasKey) return null;
-  const lines = dms.slice(0, 10).map((dm, i) => {
+  const lines = dms.slice(0, 12).map((dm, i) => {
     const contacts = dm.contacts.map(c => `${c.type}=${c.value}${c.derived ? "(derived)" : ""}`).join(", ") || "none";
     const ev = dm.evidence.slice(0, 2).map(e => sanitizeForPrompt(e.claim)).join(" | ") || "n/a";
-    return `${i + 1}. ${dm.name} — ${dm.title} | confidence ${dm.confidence} | sources ${dm.sourceUrls.length} | contacts: ${contacts} | evidence: ${ev}`;
+    return `${i + 1}. ${dm.name} — ${dm.title} | function: ${dm.departmentLabel} | confidence ${dm.confidence} | sources ${dm.sourceUrls.length} | contacts: ${contacts} | evidence: ${ev}`;
   }).join("\n");
 
   const prompt = `You are a B2B prospect researcher. Organization: "${orgName}".
+We sell: ${offering.pillar}. Likely buyer function at this prospect: ${offering.label}.
 Candidate decision-makers found on the open web (LinkedIn, company pages, directories, news):
 ${lines}
 
 Rules:
-- Drop false positives: people who do NOT work at ${orgName}, journalists/analysts, generic org names, hobby clubs.
-- Keep only real decision-makers (founder, C-suite, president, VP, director, head of function).
-- Fix titles (e.g. "Chief Executive Officer (CEO)" -> "CEO").
+- Drop false positives: people who do NOT work at ${orgName} (e.g. CEOs of OTHER companies who merely sit on this board), journalists/analysts, generic org names, hobby clubs.
+- Keep real decision-makers at ALL levels: functional heads, directors, VPs, heads of shared services/BPO/ITES, procurement leads, BU heads — not just the C-suite. The day-to-day buyer matters more than the CEO.
+- Fix titles (e.g. "Chief Executive Officer (CEO)" -> "CEO"). Use the person's actual function title as found in evidence.
 - bio: ONE factual sentence max, only from the evidence given. No invented facts.
-- score 0-100 = best person to reach for general B2B outreach. Budget/decision authority is the PRIMARY factor: a sitting CEO, chair, or founder must outrank a CIO/VP/CMO of the same company even when the lower role has a LinkedIn link and the CEO does not. Reachability (contacts found) breaks ties between similar-authority roles. Never score a CEO/founder below 70 when they are verified at this company.
-- reasoning: ONE specific sentence citing corroboration/contacts. No fluff.
-- best: the single top pick with reasoning.
+- confidence: 0-100, how sure you are this person works at ${orgName} in this role (evidence corroboration).
+- reasoning: ONE specific sentence saying which function/department this person owns and whether they would evaluate ${offering.pillar} for ${orgName}. No fluff.
+- insights: 2-3 short observations about this company's buying structure (who owns what, gaps).
 
 Return ONLY JSON:
-{"decisionMakers":[{"name":"...","title":"...","bio":"...","confidence":0,"score":0,"reasoning":"..."}],"best":{"name":"...","score":0,"reasoning":"..."},"insights":["...","...","..."]}`;
+{"decisionMakers":[{"name":"...","title":"...","bio":"...","confidence":0,"reasoning":"..."}],"insights":["...","...","..."]}`;
 
   try {
     const { result } = await aiRegistry.generateJSON<any>(prompt, { temperature: 0.2, maxTokens: 3000 });
@@ -690,13 +870,12 @@ Return ONLY JSON:
     }
     const merged = dms.map(dm => {
       const r = byName.get(dm.name.toLowerCase().replace(/[^a-z]/g, ""));
-      if (!r) return dm;
+      if (!r) return { ...dm, confidence: Math.min(dm.confidence, 45) };
       return {
         ...dm,
         title: typeof r.title === "string" && r.title.trim() ? r.title.trim().slice(0, 70) : dm.title,
         bio: typeof r.bio === "string" ? r.bio.slice(0, 300) : dm.bio,
         confidence: typeof r.confidence === "number" ? clamp(r.confidence) : dm.confidence,
-        score: typeof r.score === "number" ? clamp(Math.round(0.5 * dm.score + 0.5 * r.score)) : dm.score,
         reasoning: typeof r.reasoning === "string" && r.reasoning.trim().length >= 80 ? r.reasoning.trim().slice(0, 400) : dm.reasoning,
       };
     });
@@ -797,6 +976,13 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
   const orgDomain = identity.domain || (nameMatches(nameDomain) ? nameDomain : wikiSite && nameMatches(wikiSite) ? wikiSite : null) || earlyDomain || nameDomain;
   const textCorpus = [...pages, ...searchResults.map(r => ({ url: r.url, content: `${r.title}\n${r.snippet}` }))];
   const allCompanyEmails = collectCompanyEmails(textCorpus, orgDomain);
+  const offering = inferOffering(
+    textCorpus.map(p => p.content).join("\n"),
+    wiki?.profile?.industry || "",
+    wiki?.profile?.description || ""
+  );
+  const deptOrder = departmentOrder(offering);
+  console.log("[Org] Offering inferred:", offering.departmentId, "|", offering.reason.slice(0, 90));
 
   const hits: PersonHit[] = [];
   const orgWord = identity.name.toLowerCase().split(" ")[0];
@@ -852,6 +1038,9 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
         score: 0,
         authorityScore: 0,
         reachScore: 0,
+        relevance: 0,
+        department: "bu-leadership",
+        departmentLabel: "Business Unit & Division Leadership",
         reasoning: "",
       });
     } else {
@@ -890,27 +1079,31 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
 
   const sizeKnown = !!(wiki?.profile?.size);
   for (const dm of dms) scoreDecisionMaker(dm, sizeKnown);
-  dms = rankDecisionMakers(dms);
-  dms.forEach((dm, i) => { dm.reasoning = buildReasoning(dm, identity.name, i + 1); });
-  dms = dms.slice(0, 10);
+  dms = rankDecisionMakers(dms, deptOrder).slice(0, 16);
 
   let insights: string[] = [];
-  const refined = await refineWithAI(identity.name, dms);
+  const refined = await refineWithAI(identity.name, dms, offering);
   if (refined) {
-    dms = rankDecisionMakers(refined.decisionMakers);
-    dms.forEach((dm, i) => {
-      if (!dm.reasoning) {
-        dm.reasoning = buildReasoning(dm, identity.name, i + 1);
-      } else {
-        const placement = i === 0
-          ? "Top pick: strongest balance of decision authority and verified reachability."
-          : `Ranked #${i + 1} - ${dm.score >= 65 ? "strong alternative with good reachability" : dm.score >= 45 ? "useful secondary contact" : "lower-priority contact"}.`;
-        dm.reasoning = dm.reasoning.replace(/Ranked #\d+ - [^.]+\./, placement);
-      }
-    });
+    dms = refined.decisionMakers;
     insights = refined.insights;
     console.log("[Org] AI refined", dms.length);
   }
+  dms = rankDecisionMakers(dms, deptOrder);
+  dms = capDepartments(dms).slice(0, 12);
+  dms.forEach((dm, i) => {
+    const deptDef = DEPT_BY_ID.get(dm.department);
+    const pillar = dm.department === offering.departmentId ? offering.pillar : deptDef?.pillar || offering.pillar;
+    const placement = i === 0
+      ? dm.department === "exec-sponsor"
+        ? `Ranked #1: senior sponsor at ${identity.name} — useful for escalation, not the day-to-day buyer of ${offering.pillar}.`
+        : `Top pick for ${pillar}: this role controls that purchase at ${identity.name}.`
+      : `Ranked #${i + 1} in ${dm.departmentLabel}.`;
+    if (!refined || !dm.reasoning) {
+      dm.reasoning = buildReasoning(dm, identity.name, i + 1, offering);
+    } else {
+      dm.reasoning = dm.reasoning.replace(/Ranked #\d+[^.]*(?:\.|$)/, placement);
+    }
+  });
 
   const fieldIndustry = fieldFromCorpus(pages, /(?:Industry|Sector)\s*:\s*([^\n|]{4,70})/i);
   const fieldSize = fieldFromCorpus(pages, /\b(\d[\d,]{1,9}\s*(?:[-–]\s*\d+)?\s*(?:employees|staff members))\b/i);
@@ -936,15 +1129,32 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
   const confidenceScore = dms.length ? clamp(avgConf * 0.6 + Math.min(100, searchResults.length * 6) * 0.4) : 25;
   const researchQuality = clamp(Math.min(100, pages.length * 12 + searchResults.length * 2) * 0.5 + avgConf * 0.5);
 
+  const departments: DepartmentGroup[] = [];
+  for (let i = 0; i < deptOrder.length; i++) {
+    const id = deptOrder[i];
+    const def = DEPT_BY_ID.get(id);
+    if (!def) continue;
+    const members = dms.filter(dm => dm.department === id);
+    if (!members.length) continue;
+    departments.push({
+      id,
+      label: def.label,
+      pillar: def.pillar,
+      relevance: Math.max(45, 100 - i * 6),
+      personCount: members.length,
+      recommended: members[0] ? { name: members[0].name, title: members[0].title, score: members[0].score } : null,
+    });
+  }
+
   if (!insights.length) {
     insights = [
-      top ? `Best contact: ${top.name}, ${top.title} — score ${top.score}/100. ${top.reasoning}` : "No verified decision-makers found in public sources.",
-      `${dms.length} decision-maker${dms.length === 1 ? "" : "s"} identified across ${new Set(dms.flatMap(d => d.sourceUrls)).size} unique sources.`,
-      org.size || org.industry ? `Org profile: ${[org.industry, org.size, org.headquarters].filter(Boolean).join(" · ")}.` : "Limited public org profile data - results ranked by source corroboration.",
+      top ? `Best contact: ${top.name}, ${top.title} — owns ${top.departmentLabel}. ${top.reasoning}` : "No verified decision-makers found in public sources.",
+      `Targeting ${offering.pillar}. ${offering.reason}`,
+      `${dms.length} decision-makers across ${departments.length} departments and ${new Set(dms.flatMap(d => d.sourceUrls)).size} unique sources.`,
     ];
   }
 
-  const sections = buildSections(org, dms, top, searchResults);
+  const sections = buildSections(org, dms, top, searchResults, offering, departments);
   const result: OrgResearchResult = {
     type: "organization",
     id: Date.now().toString(),
@@ -952,9 +1162,11 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
     timestamp: new Date().toISOString(),
     organization: org,
     decisionMakers: dms,
+    offering,
+    departments,
     recommendation: {
       top,
-      ranked: dms.map((dm, i) => ({ rank: i + 1, name: dm.name, title: dm.title, score: dm.score, confidence: dm.confidence, reasoning: dm.reasoning })),
+      ranked: dms.map((dm, i) => ({ rank: i + 1, name: dm.name, title: dm.title, department: dm.departmentLabel, score: dm.score, confidence: dm.confidence, reasoning: dm.reasoning })),
     },
     confidenceScore,
     researchQuality,
@@ -977,6 +1189,8 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
       rawHits: hits.length,
       durationMs: Date.now() - started,
       aiUsed: !!refined,
+      offering: offering.departmentId,
+      departments: departments.map(d => `${d.id}:${d.personCount}`),
     },
   };
 
@@ -1089,7 +1303,7 @@ function pickFromResults(results: SearchResult[], re: RegExp): string {
   return "";
 }
 
-function buildSections(org: OrgProfile, dms: DecisionMaker[], top: DecisionMaker | null, results: SearchResult[]) {
+function buildSections(org: OrgProfile, dms: DecisionMaker[], top: DecisionMaker | null, results: SearchResult[], offering: OfferingInference, departments: DepartmentGroup[]) {
   const sections: any[] = [];
   sections.push({
     title: "Organization Overview",
@@ -1102,20 +1316,40 @@ function buildSections(org: OrgProfile, dms: DecisionMaker[], top: DecisionMaker
       org.website && { label: "Website", value: org.website, sourceUrl: org.website, confidence: 80 },
     ].filter(Boolean),
   });
+  sections.push({
+    title: "Target Offering (auto-inferred)",
+    items: [
+      { label: offering.label, value: `Offering we lead with: ${offering.pillar}\n${offering.reason}`, confidence: 70 },
+      { label: "Buying committee mapped", value: departments.map(d => `${d.label} — ${d.personCount} person/people${d.recommended ? ` (reach: ${d.recommended.name}, ${d.recommended.title})` : ""}`).join("\n") || "No department groups resolved.", confidence: 65 },
+    ],
+  });
   if (top) {
     sections.push({
       title: "Best Person To Reach",
       items: [
-        { label: `${top.name} — ${top.title}`, value: top.reasoning, sourceUrl: top.sourceUrls[0] || null, confidence: top.confidence },
-        { label: "Decision score", value: `${top.score}/100 (authority ${top.authorityScore}/100 · reachability ${top.reachScore}/100)`, confidence: top.confidence },
+        { label: `${top.name} — ${top.title} (${top.departmentLabel})`, value: top.reasoning, sourceUrl: top.sourceUrls[0] || null, confidence: top.confidence },
+        { label: "Decision score", value: `${top.score}/100 (function fit ${top.authorityScore}/100 · reachability ${top.reachScore}/100)`, confidence: top.confidence },
         ...(top.contacts.length ? [{ label: "Contact", value: top.contacts.map(c => `${c.type}: ${c.value} (${c.confidence}%)${c.derived ? " [derived]" : ""}`).join("\n"), confidence: top.reachScore }] : []),
       ],
+    });
+  }
+  if (departments.length) {
+    sections.push({
+      title: "Decision Makers by Department",
+      items: departments.map(d => {
+        const members = dms.filter(dm => dm.department === d.id);
+        return {
+          label: `${d.label} — buys: ${d.pillar}`,
+          value: members.map((m, i) => `${i === 0 && d.recommended ? "→ REACH: " : "   "}${m.name} — ${m.title} (score ${m.score}, conf ${m.confidence}%)${m.contacts.length ? ` [${m.contacts.map(c => c.type).join(", ")}]` : ""}`).join("\n"),
+          confidence: d.relevance,
+        };
+      }),
     });
   }
   sections.push({
     title: "Key Decision Makers",
     items: dms.map((dm, i) => ({
-      label: `#${i + 1} ${dm.name} — ${dm.title}`,
+      label: `#${i + 1} ${dm.name} — ${dm.title} · ${dm.departmentLabel}`,
       value: [dm.reasoning, dm.bio, dm.contacts.map(c => `${c.type}: ${c.value}`).join(" · ")].filter(Boolean).join("\n"),
       sourceUrl: dm.sourceUrls[0] || null,
       confidence: dm.confidence,
