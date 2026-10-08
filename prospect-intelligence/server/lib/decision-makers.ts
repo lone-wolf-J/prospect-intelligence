@@ -172,15 +172,19 @@ const NAME_RE = new RegExp(`\\b(${NAME_TOKEN}(?:\\s+(?:${NAME_TOKEN}|de|van|von|
 
 function looksLikePersonName(name: string): boolean {
   if (!name || name.length < 4 || name.length > 45) return false;
-  let fixed = name.trim();
+  let fixed = name.trim().replace(/\s+/g, " ");
   if (/\.\s/.test(fixed)) return false;
+  const STOP_FIRST = /^(new|los|san|as|of|the|and|or|on|at|in|to|for|our|we|team|board|directors?|officers?|leadership|executive|profile|contact|about|read|more|learn|view|see|meet|back|top|next|previous|page|home|senior|chief|chair|former|vice|head|global|our)$/i;
+  const STOP_TAIL = /^(york|angeles|francisco|jersey|vegas|orleans|quin|unknown|inc|llc)$/i;
   const comma = fixed.match(/^([A-Za-z'’\.\-]{2,25}),\s+([A-Z][A-Za-z'’\.\-]{1,20})$/);
   if (comma) fixed = `${comma[2]} ${comma[1]}`;
   const words = fixed.split(/\s+/);
   if (words.length < 2 || words.length > 4) return false;
   if (!/^[A-Z]/.test(fixed)) return false;
+  if (STOP_FIRST.test(words[0])) return false;
+  if (STOP_TAIL.test(words[words.length - 1])) return false;
   if (/^(vice|senior|chief|executive|head|director|managing|general|deputy|global|regional|former|acting|interim|president|founder|co|partner|manager|team|associate|assistant|principal|officer|financial|marketing|operating|technology|information|people|commercial|strategy|revenue|product|legal|security|medical|engineering|growth|digital|data|analytics|customer|communications|administrative)\b/i.test(fixed)) return false;
-  if (/\b(inc|llc|ltd|corp|co|the|and|of|at|for|ceo|usa|uk|llp|accounts|services|solutions|department|division|business)\b/i.test(fixed)) return false;
+  if (/\b(inc|llc|ltd|corp|corp|corporation|incorporated|holdings|globally|internationally|the|and|of|at|for|ceo|usa|uk|llp|accounts|services|solutions|department|division|business|executive|president|officer|director|founder|headquarters)\b/i.test(fixed)) return false;
   if (/\b(company|systems|technologies|solutions|services|group|university|institute|foundation|media|networks|labs|capital|partners)\b/i.test(fixed)) return false;
   if (/^(mr|mrs|ms|dr|sir)\.?\s/i.test(fixed)) return false;
   const capitalized = words.filter(w => /^[A-Z]/.test(w)).length;
@@ -197,10 +201,14 @@ interface PersonHit {
 }
 
 function normalizePersonName(name: string): string {
-  const trimmed = (name || "").trim();
-  const comma = trimmed.match(/^([A-Za-z'’\.\-]{2,25}),\s+([A-Z][A-Za-z'’\.\-]{1,20})$/);
-  if (comma) return `${comma[2]} ${comma[1]}`;
-  return trimmed;
+  let s = (name || "").replace(/\s+/g, " ").trim();
+  const comma = s.match(/^([A-Za-z'’\.\-]{2,25}),\s+([A-Z][A-Za-z'’\.\-]{1,20})$/);
+  if (comma) s = `${comma[2]} ${comma[1]}`;
+  const words = s.split(" ");
+  const TITLEISH = /^(founder|co[- ]?founder|chief|executive|officer|president|chairwoman|chairman|chairperson|director|vice|senior|svp|evp|ceo|cto|cfo|coo|cmo|cro|cio|cpo|ciso|global|head|manager|partner|owner|exec|staff|department|corporation|inc|llc|ltd|company|holdings|president|internationally|globally)$/i;
+  const cut = words.findIndex((w, i) => i >= 2 && TITLEISH.test(w));
+  if (cut > 0) s = words.slice(0, cut).join(" ");
+  return s;
 }
 
 function pushHit(hits: PersonHit[], hit: PersonHit) {
@@ -270,16 +278,33 @@ function cleanTitle(raw: string): string {
 
 function stripWiki(value: string): string {
   if (!value) return "";
-  return value
+  let v = value
     .replace(/\{\{\s*Start date(?:\s*and\s*age)?\|(\d{4})(?:\|\d{1,2})?(?:\|\d{1,2})?[^}]*\}\}/gi, "$1")
-    .replace(/\{\{(?:URL|cite[^}]*|nowrap)[^}]*\}\}/gi, " ")
+    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  for (let i = 0; i < 6 && /\{\{/.test(v); i++) v = v.replace(/\{\{[^{}]*\}\}/g, " ");
+  v = v
+    .replace(/\{\{|\}\}/g, " ")
     .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
     .replace(/\[\[([^\]]+)\]\]/g, "$1")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, " ")
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\(([^)]{0,80})\)/g, " ")
+    .replace(/[\[\]|]+/g, " ")
     .replace(/\s+/g, " ")
+    .replace(/,?\s*\.{2,}.*$/, "")
     .replace(/\s+in$/, "")
     .trim();
+  return v;
+}
+
+function sanitizeHQ(v: string): string {
+  let s = (v || "").trim();
+  s = s.replace(/^(?:headquartered|based|located)\s+(?:in|at)\s+/i, "");
+  s = s.replace(/\{\{[^}]*\}\}/g, " ").replace(/\[[^\]]*\]/g, " ").replace(/\([^)]{0,80}\)/g, " ");
+  s = s.replace(/\s+/g, " ").replace(/\.\s+[A-Za-z].*$/, "").replace(/,?\s*\.{2,}\s*$/, "").replace(/[\s,;]+$/, "").trim();
+  const words = s.split(" ");
+  if (words.length > 8) s = words.slice(0, 8).join(" ").replace(/,?\s*$/, "");
+  return s.length >= 3 && /[A-Za-z]/.test(s) && !/[{}[\]]/.test(s) ? s : "";
 }
 
 function parseInfobox(wikitext: string): Record<string, string> {
@@ -362,25 +387,30 @@ async function fetchWikipediaProfile(orgName: string): Promise<{
       const res: any = await nf(url, { headers: { "User-Agent": "ProspectIntel/1.0" } } as any);
       return await res.json();
     };
-    const searchData: any = await fetchJson(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(`"${orgName}"`)}&format=json&srlimit=4&origin=*`);
-    const candidates: string[] = (searchData?.query?.search || []).map((s: any) => s.title);
-    if (!candidates.length) {
-      console.log("[Org] Wikipedia: no exact-phrase page for", orgName);
-      return null;
-    }
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const orgNormFull = norm(orgName);
     const orgLower = orgName.toLowerCase();
-    for (const candidate of candidates.slice(0, 3)) {
-      const pageData: any = await fetchJson(`https://en.wikipedia.org/w/api.php?action=query&prop=extracts|revisions&exintro=1&explaintext=1&rvprop=content&rvslots=main&titles=${encodeURIComponent(candidate)}&format=json&origin=*`);
-      const page: any = Object.values(pageData?.query?.pages || {})[0];
-      if (!page) continue;
+    const rankTitle = (t: string) => {
+      const n = norm(t);
+      if (n === orgNormFull) return 4;
+      if (orgNormFull.length >= 4 && n.startsWith(orgNormFull)) return n.length - orgNormFull.length <= 6 ? 3 : 1;
+      if (orgNormFull.length >= 4 && n.includes(orgNormFull)) return 1;
+      return 0;
+    };
+    const COMPANY_RE = /\b(company|corporation|inc\.?|incorporated|multinational|startup|software|technolog(?:y|ies)|founded|headquartered|subsidiary|enterprise|provider|vendor|privately held|publicly traded|firm)\b/i;
+    const buildFromPage = (page: any) => {
+      if (!page || page.missing) return null;
       const wikitext: string = page.revisions?.[0]?.slots?.main?.["*"] || "";
       const extract: string = page.extract || "";
-      const titleNorm = candidate.toLowerCase().replace(/[^a-z0-9]/g, "");
-      const orgNorm = orgLower.replace(/[^a-z0-9]/g, "");
-      const valid = extract.toLowerCase().includes(orgLower) || titleNorm === orgNorm || (orgNorm.length >= 6 && orgNorm.includes(titleNorm));
+      const title: string = page.title || "";
+      if (!extract || !wikitext) return null;
+      const titleNorm = norm(title);
+      const titleMatch = titleNorm === orgNormFull || (orgNormFull.length >= 4 && titleNorm.startsWith(orgNormFull));
+      const looksCompany = COMPANY_RE.test(extract.slice(0, 400)) && !/disambiguation|may refer to|pages?\s+with\s+no\s+arguments/i.test(extract.slice(0, 250));
+      const valid = looksCompany && (titleMatch || extract.slice(0, 120).toLowerCase().includes(orgLower));
       if (!valid) {
-        console.log("[Org] Wikipedia: reject page", candidate, "for", orgName);
-        continue;
+        console.log("[Org] Wikipedia: reject page", title, "for", orgName);
+        return null;
       }
       const info = parseInfobox(wikitext);
       const websiteRaw = info.website || info.url || "";
@@ -398,8 +428,32 @@ async function fetchWikipediaProfile(orgName: string): Promise<{
           website,
         },
         keyPeople,
-        pageUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(candidate.replace(/ /g, "_"))}`,
+        pageUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
       };
+    };
+
+    const PROPS = "prop=extracts|revisions&exintro=1&explaintext=1&rvprop=content&rvslots=main";
+    const probes = [orgName, `${orgName} Inc.`, `${orgName} Corporation`, `${orgName} Ltd`, `${orgName} Group`, `${orgName} (company)`];
+    const probeData: any = await fetchJson(`https://en.wikipedia.org/w/api.php?action=query&${PROPS}&titles=${encodeURIComponent(probes.join("|"))}&redirects=1&format=json&origin=*`);
+    const probePages: any[] = Object.values(probeData?.query?.pages || {}).filter((p: any) => p && !p.missing);
+    probePages.sort((a: any, b: any) => rankTitle(b.title) - rankTitle(a.title));
+    for (const p of probePages) {
+      const res = buildFromPage(p);
+      if (res) return res;
+    }
+
+    const searchData: any = await fetchJson(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(`"${orgName}"`)}&format=json&srlimit=6&origin=*`);
+    const raw: string[] = (searchData?.query?.search || []).map((s: any) => s.title);
+    if (!raw.length) {
+      console.log("[Org] Wikipedia: no exact-phrase page for", orgName);
+      return null;
+    }
+    const candidates = [...raw].sort((a, b) => rankTitle(b) - rankTitle(a));
+    for (const candidate of candidates.slice(0, 4)) {
+      const pageData: any = await fetchJson(`https://en.wikipedia.org/w/api.php?action=query&${PROPS}&titles=${encodeURIComponent(candidate)}&format=json&origin=*`);
+      const page: any = Object.values(pageData?.query?.pages || {})[0];
+      const res = buildFromPage(page);
+      if (res) return res;
     }
     return null;
   } catch (e: any) {
@@ -551,6 +605,11 @@ function scoreDecisionMaker(dm: DecisionMaker, orgSizeKnown: boolean): void {
   else if (/\b(engineering|technology|information|data|security|research)\b/.test(t)) score += 2;
   if (/\b(founder|ceo|chief executive)\b/.test(t) && !orgSizeKnown) score += 6;
   if (/\b(manager|analyst|assistant|intern)\b/.test(t)) score -= 15;
+  if (/\b(former|previously with|retired|emeritus)\b/.test(t) || /^(?:ex|past|prior)\b/i.test(dm.title.trim())) {
+    score -= 30;
+    dm.authorityScore = clamp(dm.authorityScore - 30);
+    dm.confidence = clamp(dm.confidence - 10);
+  }
   dm.score = clamp(score);
 }
 
@@ -676,7 +735,11 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
   console.log("[Org] Search results:", searchResults.length);
 
   const wiki = await fetchWikipediaProfile(identity.name);
-  const earlyDomain = identity.domain || (wiki?.profile?.website ? wiki.profile.website.replace(/^www\./, "") : null) || deriveDomain(searchResults, identity.name);
+  const wikiSite = siteHost(wiki?.profile?.website);
+  const nameDomain = deriveDomain(searchResults, identity.name);
+  const firstToken = identity.name.toLowerCase().split(" ")[0].replace(/[^a-z0-9]/g, "");
+  const nameMatches = (d: string | null): d is string => !!d && d.split(".")[0].includes(firstToken);
+  const earlyDomain = identity.domain || (nameMatches(nameDomain) ? nameDomain : wikiSite && nameMatches(wikiSite) ? wikiSite : null) || nameDomain || wikiSite;
 
   const leadershipUrlRe = /(leadership|executive|management|team|people|founders|about|company|org-chart|board|contact)/i;
   const deepUrls: string[] = [];
@@ -718,7 +781,7 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
   const pages = await fetchPages(deepUrls, { concurrency: 4, timeoutMs: 7000 });
   console.log("[Org] Pages fetched:", pages.length, pages.map(p => p.adapter).join(","));
 
-  const orgDomain = identity.domain || (wiki?.profile?.website ? wiki.profile.website.replace(/^www\./, "") : null) || earlyDomain || deriveDomain(searchResults, identity.name);
+  const orgDomain = identity.domain || (nameMatches(nameDomain) ? nameDomain : wikiSite && nameMatches(wikiSite) ? wikiSite : null) || earlyDomain || nameDomain;
   const textCorpus = [...pages, ...searchResults.map(r => ({ url: r.url, content: `${r.title}\n${r.snippet}` }))];
   const allCompanyEmails = collectCompanyEmails(textCorpus, orgDomain);
 
@@ -759,7 +822,7 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
     const existing = grouped.get(key);
     const rule = classifyTitle(h.title);
     if (!rule) continue;
-    const evidence: EvidenceItem = { claim: h.snippet || h.title, sourceUrl: h.url, sourceTitle: h.sourceTitle, tier: h.tier };
+    const evidence: EvidenceItem = { claim: cleanClaim(h.snippet || h.title), sourceUrl: h.url, sourceTitle: h.sourceTitle, tier: h.tier };
     if (!existing) {
       grouped.set(key, {
         name: h.name.trim(),
@@ -822,7 +885,16 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
   const refined = await refineWithAI(identity.name, dms);
   if (refined) {
     dms = rankDecisionMakers(refined.decisionMakers);
-    dms.forEach((dm, i) => { if (!dm.reasoning) dm.reasoning = buildReasoning(dm, identity.name, i + 1); });
+    dms.forEach((dm, i) => {
+      if (!dm.reasoning) {
+        dm.reasoning = buildReasoning(dm, identity.name, i + 1);
+      } else {
+        const placement = i === 0
+          ? "Top pick: strongest balance of decision authority and verified reachability."
+          : `Ranked #${i + 1} - ${dm.score >= 65 ? "strong alternative with good reachability" : dm.score >= 45 ? "useful secondary contact" : "lower-priority contact"}.`;
+        dm.reasoning = dm.reasoning.replace(/Ranked #\d+ - [^.]+\./, placement);
+      }
+    });
     insights = refined.insights;
     console.log("[Org] AI refined", dms.length);
   }
@@ -840,7 +912,7 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
     website: wiki?.profile?.website || (orgDomain ? `https://${orgDomain}` : null),
     domain: orgDomain,
     industry: wiki?.profile?.industry || fieldIndustry || titleCase(industryFromDesc),
-    headquarters: hqFromText(wiki?.profile?.description || "") || wiki?.profile?.headquarters || fieldHQ || hqFallback || "",
+    headquarters: (() => { const h = sanitizeHQ(hqFromText(wiki?.profile?.description || "") || wiki?.profile?.headquarters || fieldHQ || hqFallback || ""); return looksLikePlace(h) ? h : ""; })(),
     size: wiki?.profile?.size || fieldSize || "",
     founded: normalizeFounded(wiki?.profile?.founded || ""),
     description: shortDescription,
@@ -906,15 +978,27 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
   return result;
 }
 
+function siteHost(website?: string | null): string | null {
+  if (!website) return null;
+  try {
+    const u = new URL(website.startsWith("http") ? website : `https://${website}`);
+    return u.hostname.replace(/^www\./, "");
+  } catch { return null; }
+}
+
 function deriveDomain(results: SearchResult[], orgName: string): string | null {
   const firstWord = orgName.toLowerCase().split(" ")[0].replace(/[^a-z0-9]/g, "");
+  const blocked = /linkedin|wikipedia|facebook|twitter|instagram|crunchbase|glassdoor|bloomberg|reuters|youtube|zoominfo|rocketreach|peopleai|owler|dnb\.com|forbes/;
+  const regs: string[] = [];
   for (const r of results) {
     try {
       const host = new URL(r.url).hostname.replace(/^www\./, "");
-      if (host.includes(firstWord) && !/linkedin|wikipedia|facebook|twitter|instagram|crunchbase|glassdoor|bloomberg|reuters/.test(host)) return host;
+      if (blocked.test(host)) continue;
+      const reg = host.split(".").slice(-2).join(".");
+      if (reg.includes(".") && !regs.includes(reg)) regs.push(reg);
     } catch { /* skip */ }
   }
-  return null;
+  return regs.find(g => g.split(".")[0] === firstWord) || regs.find(g => g.split(".")[0].includes(firstWord)) || null;
 }
 
 function fieldFromCorpus(corpus: { content: string }[], re: RegExp): string {
@@ -951,8 +1035,22 @@ function pickDescription(wikiDesc: string, results: SearchResult[]): string {
   return clean(first).slice(0, 400);
 }
 
+function cleanClaim(s: string): string {
+  return (s || "")
+    .replace(/\uFFFD/g, "")
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
+}
+
 function looksLikePlace(v: string): boolean {
-  return !!v && v.length >= 4 && v.length <= 70 && /\b[A-Z][a-z]+/.test(v) && !/[)(\[\]{}\\<>|]/.test(v) && v.split(" ").length <= 9;
+  if (!v || v.length < 4 || v.length > 70) return false;
+  if (/[)(\[\]{}\\<>|]/.test(v)) return false;
+  if (/\d/.test(v)) return false;
+  if (/\b(from|until|between|since|during|which|was|were|has|have)\b/i.test(v)) return false;
+  if (v.split(" ").length > 8) return false;
+  return /\b[A-Z][a-z]+/.test(v);
 }
 
 function titleCase(v: string): string {
@@ -960,7 +1058,9 @@ function titleCase(v: string): string {
 }
 
 function hqFromText(text: string): string {
-  const m = (text || "").match(/headquartered in ([^.,;]{3,60}(?:,\s*[A-Z][a-z]+)?)/i);
+  if (!text) return "";
+  const tail = `(?:,\\s*[A-Z][\\w.\\-]+(?:\\s+[A-Z][\\w.\\-]+)*)?`;
+  const m = text.match(new RegExp(`headquartered in ([^.,;]{3,60}${tail})`, "i")) || text.match(new RegExp(`based in ([^.,;]{3,60}${tail})`, "i"));
   return m ? m[1].trim() : "";
 }
 
