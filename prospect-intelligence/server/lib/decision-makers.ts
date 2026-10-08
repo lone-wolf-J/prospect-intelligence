@@ -321,9 +321,10 @@ function departmentOrder(offering: OfferingInference): string[] {
 }
 
 function computeRelevance(dm: DecisionMaker, deptIndex: number): number {
-  const deptWeight = Math.max(45, 100 - deptIndex * 6);
+  // Exec sponsors are shown last but ranked as a mid-tier department: present, never top.
+  const effIndex = dm.department === "exec-sponsor" ? Math.min(deptIndex, 5) : deptIndex;
+  const deptWeight = Math.max(45, 100 - effIndex * 6);
   let rel = 0.42 * deptWeight + 0.28 * dm.authorityScore + 0.18 * dm.confidence + 0.12 * dm.reachScore;
-  if (dm.department === "exec-sponsor") rel -= 18;
   if (/\b(former|previously with|retired|emeritus)\b/i.test(dm.title) || /^(?:ex|past|prior)\b/i.test(dm.title.trim())) rel = Math.min(rel, 55);
   if (dm.confidence < 50) rel = Math.min(rel, 66);
   return clamp(rel);
@@ -346,7 +347,7 @@ function looksLikePersonName(name: string): boolean {
   if (STOP_FIRST.test(words[0])) return false;
   if (STOP_TAIL.test(words[words.length - 1])) return false;
   if (/^(vice|senior|chief|executive|head|director|managing|general|deputy|global|regional|former|acting|interim|president|founder|co|partner|manager|team|associate|assistant|principal|officer|financial|marketing|operating|technology|information|people|commercial|strategy|revenue|product|legal|security|medical|engineering|growth|digital|data|analytics|customer|communications|administrative)\b/i.test(fixed)) return false;
-  if (/\b(inc|llc|ltd|corp|corp|corporation|incorporated|holdings|globally|internationally|the|and|of|at|for|ceo|usa|uk|llp|accounts|services|solutions|department|division|business|executive|president|officer|director|founder|headquarters)\b/i.test(fixed)) return false;
+  if (/\b(inc|llc|ltd|corp|corp|corporation|incorporated|holdings|globally|internationally|the|and|of|at|for|ceo|usa|uk|llp|accounts|services|solutions|department|division|business|executive|president|officer|director|founder|headquarters|insurance|financial|investments?)\b/i.test(fixed)) return false;
   if (/\b(company|systems|technologies|solutions|services|group|university|institute|foundation|media|networks|labs|capital|partners)\b/i.test(fixed)) return false;
   if (/^(mr|mrs|ms|dr|sir)\.?\s/i.test(fixed)) return false;
   const capitalized = words.filter(w => /^[A-Z]/.test(w)).length;
@@ -367,7 +368,7 @@ function normalizePersonName(name: string): string {
   const comma = s.match(/^([A-Za-z'’\.\-]{2,25}),\s+([A-Z][A-Za-z'’\.\-]{1,20})$/);
   if (comma) s = `${comma[2]} ${comma[1]}`;
   let words = s.split(" ");
-  const TITLEISH = /^(founder|co[- ]?founder|chief|executive|officer|president|chairwoman|chairman|chairperson|director|vice|senior|svp|evp|ceo|cto|cfo|coo|cmo|cro|cio|cpo|ciso|global|head|manager|partner|owner|exec|staff|department|corporation|inc|llc|ltd|company|holdings|president|internationally|globally)$/i;
+  const TITLEISH = /^(founder|co[- ]?founder|chief|executive|officer|president|chairwoman|chairman|chairperson|chair|trustee|director|vice|senior|svp|evp|ceo|cto|cfo|coo|cmo|cro|cio|cpo|ciso|global|head|manager|partner|owner|exec|staff|department|corporation|inc|llc|ltd|company|holdings|president|internationally|globally)$/i;
   let guard = 0;
   while (words.length > 1 && TITLEISH.test(words[0]) && guard++ < 3) words.shift();
   const cut = words.findIndex((w, i) => i >= 2 && TITLEISH.test(w));
