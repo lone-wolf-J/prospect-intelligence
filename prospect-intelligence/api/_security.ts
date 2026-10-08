@@ -55,6 +55,7 @@ const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   search: { max: 10, windowMs: 60_000 }, // 10 searches/min per IP
   candidates: { max: 15, windowMs: 60_000 },
   pitch: { max: 10, windowMs: 60_000 },
+  org: { max: 6, windowMs: 60_000 },
 };
 
 export function checkRateLimit(req: VercelRequest, key: string): boolean {

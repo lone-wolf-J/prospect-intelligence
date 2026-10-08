@@ -35,6 +35,9 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { GlassCard, Panel, GlowRing, TypeWriter, DataStream } from "@/components/ui/primitives";
+import OrgDossier, { OrgCaseData } from "@/components/OrgDossier";
+import { looksLikeOrganization } from "@/lib/orgDetect";
+import { searchOrganization } from "@/lib/api";
 
 interface IntelSection {
   title: string;
@@ -45,6 +48,7 @@ interface CaseData {
   id: string;
   query: string;
   timestamp: string;
+  type?: "person";
   person: {
     name: string;
     title: string;
@@ -426,15 +430,16 @@ interface Candidate {
 
 export default function FindThem() {
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"auto" | "person" | "org">("auto");
   const [searching, setSearching] = useState(false);
-  const [result, setResult] = useState<CaseData | null>(null);
+  const [result, setResult] = useState<(CaseData | OrgCaseData) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [candidateQuery, setCandidateQuery] = useState("");
   const [resolving, setResolving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const autoSaveToDeck = (data: CaseData) => {
+  const autoSaveToDeck = (data: any) => {
     try {
       const pipelineCase = {
         ...data,
@@ -503,9 +508,39 @@ export default function FindThem() {
     }
   };
 
+  const runOrgSearch = async (finalQuery: string) => {
+    setSearching(true);
+    setResult(null);
+    setError(null);
+    setCandidates(null);
+    try {
+      const data = await searchOrganization(finalQuery);
+      if (data.error) throw new Error(data.error);
+      if (!data.decisionMakers?.length && data.confidenceScore < 20) {
+        console.log("[Org] Low confidence result, showing anyway");
+      }
+      setResult({ ...data, savedToPipeline: true });
+      autoSaveToDeck(data);
+    } catch (err: any) {
+      const msg = err.message || "Organization search failed.";
+      if (msg.includes("QUOTA") || msg.includes("limit")) {
+        setError("AI quota temporarily exhausted. The deterministic ranking is still available - please retry in 30s.");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setSearching(false);
+    }
+  };
+
   const handleSearch = async () => {
     const q = query.trim();
     if (!q) return;
+    const effectiveMode = mode === "auto" ? (looksLikeOrganization(q) ? "org" : "person") : mode;
+    if (effectiveMode === "org") {
+      await runOrgSearch(q);
+      return;
+    }
     setSearching(true);
     setResult(null);
     setError(null);
@@ -633,7 +668,7 @@ export default function FindThem() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                placeholder='e.g. "Satya Nadella Microsoft" or "linkedin.com/in/johndoe"'
+                placeholder='e.g. "Satya Nadella Microsoft", "OpenAI" or "linkedin.com/in/johndoe"'
                 className="flex-1 min-w-0 bg-transparent outline-none text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-sans text-sm py-3"
                 style={{ opacity: 1 }}
               />
@@ -657,8 +692,35 @@ export default function FindThem() {
             </button>
           </div>
 
+          <div className="mt-4 flex justify-center">
+            <div className="inline-flex rounded-full border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur p-1 gap-1">
+              {([
+                { k: "auto", label: "Auto-detect", icon: Sparkles },
+                { k: "person", label: "Person", icon: User },
+                { k: "org", label: "Organization", icon: Building2 },
+              ] as const).map(opt => {
+                const Icon = opt.icon;
+                const active = mode === opt.k;
+                return (
+                  <button
+                    key={opt.k}
+                    onClick={() => setMode(opt.k)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all min-h-[32px] ${
+                      active
+                        ? "bg-[hsl(280,85%,55%)] text-white shadow-md"
+                        : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    }`}
+                  >
+                    <Icon size={12} />
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {["Person name + company", "LinkedIn URL", "Company + role", "Email address"].map(
+            {["Person name + company", "Company decision makers", "LinkedIn URL", "Email address"].map(
               (hint) => (
                 <span key={hint} className="text-[10px] font-sans font-medium text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-slate-800/60 backdrop-blur border border-slate-200 dark:border-slate-700 rounded-full px-3 py-1">
                   {hint}
@@ -806,9 +868,12 @@ export default function FindThem() {
 
         <AnimatePresence mode="wait">
           {searching && <ScanAnimation key="scan" query={query} />}
-          {result && !searching && (
-            <CaseDossier key="result" data={result} onSave={handleSaveToPipeline} />
-          )}
+          {result && !searching &&
+            (result.type === "organization" ? (
+              <OrgDossier key="org-result" data={result as OrgCaseData} onSave={handleSaveToPipeline} />
+            ) : (
+              <CaseDossier key="result" data={result as CaseData} onSave={handleSaveToPipeline} />
+            ))}
         </AnimatePresence>
       </section>
     </motion.div>

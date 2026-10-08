@@ -69,3 +69,16 @@ export async function getStats() {
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
 }
+
+export async function searchOrganization(query: string) {
+  const res = await fetch(`${API_BASE}/org`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Organization search failed (${res.status})`);
+  }
+  return res.json();
+}
