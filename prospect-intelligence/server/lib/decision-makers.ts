@@ -280,9 +280,15 @@ const OFFERING_CANDIDATES = ["it-data", "sales-crm", "shared-services", "busines
 
 const DEPT_BY_ID = new Map(DEPARTMENTS.map(d => [d.id, d]));
 
-export function classifyDepartment(title: string, authorityScore: number): DepartmentDef {
+export function classifyDepartment(title: string, authorityScore: number, orgName?: string): DepartmentDef {
+  let t = title || "";
+  if (orgName) {
+    const esc = orgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    t = t.replace(new RegExp(`\\b${esc}\\b`, "gi"), " ");
+  }
+  t = t.replace(/\s+/g, " ").trim();
   for (const d of DEPARTMENTS) {
-    if (d.match.test(title || "")) return d;
+    if (d.match.test(t)) return d;
   }
   return DEPT_BY_ID.get(authorityScore >= 91 ? "exec-sponsor" : "bu-leadership")!;
 }
@@ -809,11 +815,11 @@ function buildReasoning(dm: DecisionMaker, orgName: string, rank: number, offeri
   return `${dm.title} at ${orgName} - ${role}. ${owns}. ${corroboration}. ${direct}. ${placement}`;
 }
 
-function rankDecisionMakers(dms: DecisionMaker[], order: string[]): DecisionMaker[] {
+function rankDecisionMakers(dms: DecisionMaker[], order: string[], orgName?: string): DecisionMaker[] {
   const idxOf = new Map(order.map((id, i) => [id, i]));
   return dms
     .map(dm => {
-      const dept = classifyDepartment(dm.title, dm.authorityScore);
+      const dept = classifyDepartment(dm.title, dm.authorityScore, orgName);
       dm.department = dept.id;
       dm.departmentLabel = dept.label;
       dm.relevance = computeRelevance(dm, idxOf.get(dept.id) ?? order.length - 1);
@@ -1080,7 +1086,7 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
 
   const sizeKnown = !!(wiki?.profile?.size);
   for (const dm of dms) scoreDecisionMaker(dm, sizeKnown);
-  dms = rankDecisionMakers(dms, deptOrder).slice(0, 16);
+  dms = rankDecisionMakers(dms, deptOrder, identity.name).slice(0, 16);
 
   let insights: string[] = [];
   const refined = await refineWithAI(identity.name, dms, offering);
@@ -1089,7 +1095,7 @@ export async function researchDecisionMakers(query: string): Promise<OrgResearch
     insights = refined.insights;
     console.log("[Org] AI refined", dms.length);
   }
-  dms = rankDecisionMakers(dms, deptOrder);
+  dms = rankDecisionMakers(dms, deptOrder, identity.name);
   dms = capDepartments(dms).slice(0, 12);
   dms.forEach((dm, i) => {
     const deptDef = DEPT_BY_ID.get(dm.department);
