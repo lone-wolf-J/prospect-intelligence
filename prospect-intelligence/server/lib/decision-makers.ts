@@ -149,10 +149,10 @@ interface TitleRule { pattern: RegExp; score: number; seniority: string; authori
 const TITLE_RULES: TitleRule[] = [
   { pattern: /\b(co[\s-]?founder|founder|owner|proprietor)\b/i, score: 100, seniority: "Founder", authority: "Founder / owner - ultimate decision authority" },
   { pattern: /\b(chief executive officer|chief exec|ceo|managing director|chief physician)\b/i, score: 96, seniority: "C-suite (CEO)", authority: "CEO - final budget and strategy authority" },
-  { pattern: /\b(chairman|chairwoman|chairperson|president)\b/i, score: 94, seniority: "President / Chair", authority: "President / Chair - top executive authority" },
   { pattern: /\b(chief [a-z]+ officer|c[teofmripgs]o|chief [a-z]+)\b/i, score: 91, seniority: "C-suite", authority: "C-suite - owns a major budget function" },
   { pattern: /\b(executive vice president|evp|senior vice president|svp)\b/i, score: 85, seniority: "SVP / EVP", authority: "Senior executive - large budget influence" },
   { pattern: /\b(vice president|vp of|vp,|vp\b|head of|global head|director|general manager|gm)\b/i, score: 75, seniority: "VP / Director", authority: "VP / Director - departmental budget owner" },
+  { pattern: /\b(chairman|chairwoman|chairperson|president)\b/i, score: 94, seniority: "President / Chair", authority: "President / Chair - top executive authority" },
   { pattern: /\b(partner|managing partner|general counsel|counsel)\b/i, score: 70, seniority: "Partner / Legal", authority: "Partner - shared decision authority" },
   { pattern: /\b(manager|team lead|lead)\b/i, score: 55, seniority: "Manager", authority: "Manager - influencer, limited budget authority" },
 ];
@@ -201,7 +201,7 @@ interface PersonHit {
 }
 
 function normalizePersonName(name: string): string {
-  let s = (name || "").replace(/\s+/g, " ").trim();
+  let s = (name || "").replace(/\s+/g, " ").replace(/[.,;:]+$/, "").trim();
   const comma = s.match(/^([A-Za-z'’\.\-]{2,25}),\s+([A-Z][A-Za-z'’\.\-]{1,20})$/);
   if (comma) s = `${comma[2]} ${comma[1]}`;
   const words = s.split(" ");
@@ -636,8 +636,21 @@ function buildReasoning(dm: DecisionMaker, orgName: string, rank: number): strin
   return `${dm.title} at ${orgName} - ${role}. ${corroboration}. ${direct}. ${placement}`;
 }
 
+function applyAuthorityBands(dm: DecisionMaker): number {
+  if (/\b(former|previously|retired|emeritus)\b/i.test(dm.title)) return clamp(Math.min(dm.score, 70));
+  if (dm.confidence < 50 && dm.sourceUrls.length < 2) return clamp(Math.min(dm.score, 70));
+  const a = dm.authorityScore || classifyTitle(dm.title)?.score || 50;
+  if (a >= 96) return clamp(Math.max(dm.score, 86));
+  if (a >= 91) return clamp(Math.min(Math.max(dm.score, 74), 84));
+  if (a >= 85) return clamp(Math.min(dm.score, 78));
+  if (a >= 75) return clamp(Math.min(dm.score, 74));
+  return clamp(Math.min(dm.score, 65));
+}
+
 function rankDecisionMakers(dms: DecisionMaker[]): DecisionMaker[] {
-  return [...dms].sort((a, b) => b.score - a.score || b.confidence - a.confidence);
+  return dms
+    .map(dm => ({ ...dm, score: applyAuthorityBands(dm) }))
+    .sort((a, b) => b.score - a.score || b.confidence - a.confidence || (b.authorityScore || 0) - (a.authorityScore || 0));
 }
 
 // ---------- AI refinement ----------
@@ -661,7 +674,7 @@ Rules:
 - Keep only real decision-makers (founder, C-suite, president, VP, director, head of function).
 - Fix titles (e.g. "Chief Executive Officer (CEO)" -> "CEO").
 - bio: ONE factual sentence max, only from the evidence given. No invented facts.
-- score 0-100 = best person to reach for general B2B outreach, balancing budget authority AND reachability (contacts found).
+- score 0-100 = best person to reach for general B2B outreach. Budget/decision authority is the PRIMARY factor: a sitting CEO, chair, or founder must outrank a CIO/VP/CMO of the same company even when the lower role has a LinkedIn link and the CEO does not. Reachability (contacts found) breaks ties between similar-authority roles. Never score a CEO/founder below 70 when they are verified at this company.
 - reasoning: ONE specific sentence citing corroboration/contacts. No fluff.
 - best: the single top pick with reasoning.
 
@@ -683,7 +696,7 @@ Return ONLY JSON:
         title: typeof r.title === "string" && r.title.trim() ? r.title.trim().slice(0, 70) : dm.title,
         bio: typeof r.bio === "string" ? r.bio.slice(0, 300) : dm.bio,
         confidence: typeof r.confidence === "number" ? clamp(r.confidence) : dm.confidence,
-        score: typeof r.score === "number" ? clamp(r.score) : dm.score,
+        score: typeof r.score === "number" ? clamp(Math.round(0.5 * dm.score + 0.5 * r.score)) : dm.score,
         reasoning: typeof r.reasoning === "string" && r.reasoning.trim().length >= 80 ? r.reasoning.trim().slice(0, 400) : dm.reasoning,
       };
     });
