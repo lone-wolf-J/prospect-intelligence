@@ -124,6 +124,15 @@ export function expandQueries(identity: Identity): string[] {
 
 // Source quality ranking
 export function rankSources(results: SearchResult[], identity: Identity): SearchResult[] {
+  // Precompute corroboration: distinct domains sharing the same normalized title/claim
+  const corroborationDomains = new Map<string, Set<string>>();
+  const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+  for (const r of results) {
+    const k = (r.title || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
+    if (!k) continue;
+    if (!corroborationDomains.has(k)) corroborationDomains.set(k, new Set());
+    corroborationDomains.get(k)!.add(hostOf(r.url));
+  }
   return results.map(r => {
     let score = 0;
     // 30% identity match
@@ -158,8 +167,11 @@ export function rankSources(results: SearchResult[], identity: Identity): Search
     let directScore = r.url.includes("linkedin.com/in/") || (identity.company && r.url.includes(identity.company.toLowerCase().replace(/\s+/g, ""))) ? 100 : 50;
     score += directScore * 0.15;
 
-    // 10% corroboration (will be updated after dedup, placeholder 50)
-    score += 50 * 0.1;
+    // 10% corroboration: how many distinct domains cover a near-identical claim/title
+    const claimKey = titleLower.replace(/[^a-z0-9]/g, "").slice(0, 40);
+    const covering = corroborationDomains.get(claimKey);
+    const corroborationScore = Math.min(100, (covering ? covering.size : 1) * 45);
+    score += corroborationScore * 0.1;
 
     // 10% role relevance (if title/company match)
     let roleScore = 50;
@@ -181,6 +193,7 @@ export interface Fact {
   evidence: string;
   confidence: number;
   discoveredAt: string;
+  corroboratingSources?: string[];
 }
 
 export function extractFacts(results: SearchResult[]): Fact[] {
@@ -204,19 +217,27 @@ export function extractFacts(results: SearchResult[]): Fact[] {
   return facts;
 }
 
-// Deduplication: same claim from multiple sources -> one event
+// Deduplication: same claim from multiple sources -> one event, tracking distinct corroborating domains
 export function deduplicateFacts(facts: Fact[]): Fact[] {
   const seen = new Map<string, Fact>();
   for (const f of facts) {
     const key = f.claim.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
-    if (!seen.has(key)) {
-      seen.set(key, f);
-    } else {
-      // Merge: keep higher tier, add source count (for confidence)
-      const existing = seen.get(key)!;
-      if (f.tier < existing.tier) seen.set(key, f);
-      // Could add corroboration count
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, { ...f, corroboratingSources: f.sourceUrl ? [f.sourceUrl] : [] });
+      continue;
     }
+    // Merge: prefer higher-authority (lower tier) source, accumulate distinct source URLs
+    const base = f.tier < existing.tier ? f : existing;
+    const srcs = new Set<string>([...(base.corroboratingSources || []), ...(existing.corroboratingSources || []), ...(f.corroboratingSources || [])]);
+    if (f.sourceUrl) srcs.add(f.sourceUrl);
+    if (existing.sourceUrl) srcs.add(existing.sourceUrl);
+    const distinct = [...srcs];
+    seen.set(key, {
+      ...base,
+      corroboratingSources: distinct,
+      confidence: Math.min(0.99, base.confidence + 0.05 * Math.max(0, distinct.length - 1)),
+    });
   }
   return Array.from(seen.values());
 }
@@ -260,6 +281,8 @@ export function calculateQuality(identity: Identity, facts: Fact[], sources: Sea
   const evidenceDensity = Math.min(100, facts.length * 5);
   const recency = facts.filter(f => f.publishedAt && (Date.now() - new Date(f.publishedAt).getTime()) < 90 * 86400000).length * 10;
   const coverage = Math.min(100, sources.length * 5);
-  const corroboration = 50; // placeholder
+  const corroboration = facts.length
+    ? facts.reduce((a, f) => a + Math.min(100, (f.corroboratingSources?.length || 1) * 50), 0) / facts.length
+    : 0;
   return Math.round((identityConf * 0.2 + tierAvg * 0.2 + evidenceDensity * 0.2 + recency * 0.15 + coverage * 0.15 + corroboration * 0.1));
 }

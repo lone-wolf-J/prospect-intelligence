@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search,
@@ -41,7 +41,7 @@ import { searchOrganization } from "@/lib/api";
 
 interface IntelSection {
   title: string;
-  items: { label: string; value: string; confidence?: number }[];
+  items: { label: string; value: string; confidence?: number; sourceUrl?: string | null }[];
 }
 
 interface CaseData {
@@ -72,6 +72,10 @@ interface CaseData {
   sections: IntelSection[];
   aiInsights: string[];
   confidenceScore: number;
+  researchQuality?: number;
+  citations?: { claim: string; sourceTitle: string; sourceUrl: string; tier: number; confidence: number }[];
+  whyNow?: { event: string; date?: string; evidence?: string; source?: string; whyItMatters?: string }[];
+  timeline?: { date: string; event: string; source?: string }[];
   savedToPipeline: boolean;
 }
 
@@ -80,6 +84,7 @@ const SECTION_ICONS: Record<string, any> = {
   "Executive Profile": User,
   "Career Progression": Briefcase,
   "Current Role & Responsibilities": Target,
+  "Current Company Intelligence": Building2,
   "Organization Intelligence": Building2,
   "Recent Public Activity": Newspaper,
   "Thought Leadership Analysis": Brain,
@@ -94,8 +99,13 @@ const SECTION_ICONS: Record<string, any> = {
   "Personalized Conversation Starters": MessageCircle,
   "Discovery Questions": HelpCircle,
   "Recommended Outreach Strategy": Send,
+  "Risks, Unknowns & Information Gaps": AlertTriangle,
   "Risks & Unknowns": AlertTriangle,
+  "Source Appendix": Globe,
   "Confidence Assessment": CheckCircle,
+  "Contact": User,
+  "Personal Background": Award,
+  "Timeline & Events": Activity,
   "Career History": Briefcase,
   "Key Achievements": Award,
   "Digital Presence": Globe,
@@ -103,7 +113,94 @@ const SECTION_ICONS: Record<string, any> = {
   "Identity": User,
   "Digital Footprint": Activity,
   "Google Results": Search,
+  "Web Results": Globe,
 };
+
+// Render section values with markdown-table support (spec: tables where appropriate)
+function RenderValue({ value }: { value: string }): ReactNode {
+  const lines = (value || "").split("\n");
+  const blocks: ReactNode[] = [];
+  let buf: string[] = [];
+  let key = 0;
+  const isRow = (l: string) => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = (l: string) => /^\s*\|[\s:|-]+\|\s*$/.test(l);
+  const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  const flush = () => {
+    if (buf.length) {
+      blocks.push(<div key={key++} className="whitespace-pre-wrap">{buf.join("\n")}</div>);
+      buf = [];
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (isRow(lines[i]) && i + 1 < lines.length && isSep(lines[i + 1])) {
+      flush();
+      const header = cells(lines[i]);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && isRow(lines[i]) && !isSep(lines[i])) {
+        rows.push(cells(lines[i]));
+        i++;
+      }
+      i--;
+      blocks.push(
+        <div key={key++} className="overflow-x-auto my-2">
+          <table className="min-w-full text-xs border border-slate-200 dark:border-slate-700 border-collapse">
+            <thead>
+              <tr>
+                {header.map((h, hi) => (
+                  <th key={hi} className="px-2 py-1.5 text-left font-semibold text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>
+                  {r.map((c, ci) => (
+                    <td key={ci} className="px-2 py-1.5 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">{c}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    } else {
+      buf.push(lines[i]);
+    }
+  }
+  flush();
+  return <>{blocks}</>;
+}
+
+// Markdown tables -> HTML for the print/PDF window
+function mdToHtml(value: string): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = (value || "").split("\n");
+  let out = "";
+  let i = 0;
+  const isRow = (l: string) => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = (l: string) => /^\s*\|[\s:|-]+\|\s*$/.test(l);
+  const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => esc(c.trim()));
+  let buf: string[] = [];
+  while (i < lines.length) {
+    if (isRow(lines[i]) && i + 1 < lines.length && isSep(lines[i + 1])) {
+      if (buf.length) { out += `<div>${buf.map(l => esc(l)).join("<br/>")}</div>`; buf = []; }
+      const header = cells(lines[i]);
+      i += 2;
+      out += `<table style="border-collapse:collapse;margin:6px 0;font-size:12px;"><thead><tr>${header.map(h => `<th style="border:1px solid #e2e8f0;padding:4px 8px;background:#f8fafc;text-align:left;">${h}</th>`).join("")}</tr></thead><tbody>`;
+      while (i < lines.length && isRow(lines[i]) && !isSep(lines[i])) {
+        out += `<tr>${cells(lines[i]).map(c => `<td style="border:1px solid #e2e8f0;padding:4px 8px;">${c}</td>`).join("")}</tr>`;
+        i++;
+      }
+      out += `</tbody></table>`;
+    } else {
+      buf.push(lines[i]);
+      i++;
+    }
+  }
+  if (buf.length) out += `<div>${buf.map(l => esc(l)).join("<br/>")}</div>`;
+  return out;
+}
 
 function ScanAnimation({ query }: { query: string }) {
   return (
@@ -206,9 +303,14 @@ function IntelSectionCard({ section, index }: { section: IntelSection; index: nu
                         <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 mb-1">
                           {item.label}
                         </div>
-                        <div className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-                          {item.value}
+                        <div className="text-sm text-slate-300 leading-relaxed">
+                          <RenderValue value={item.value} />
                         </div>
+                        {item.sourceUrl && (
+                          <a href={item.sourceUrl} target="_blank" rel="noopener" className="inline-flex items-center gap-1 mt-1 text-[10px] text-cyan/70 hover:underline max-w-full truncate">
+                            <ExternalLink size={9} /> {item.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 70)}
+                          </a>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -231,9 +333,11 @@ function CaseDossier({ data, onSave }: { data: CaseData; onSave: () => void }) {
       <style>body{font-family:Inter, sans-serif; padding:32px; color:#0f172a; max-width:800px; margin:0 auto;} h1{font-size:28px; margin-bottom:4px;} h2{font-size:14px; text-transform:uppercase; letter-spacing:0.12em; color:#7c3aed; margin-top:28px; border-bottom:1px solid #e2e8f0; padding-bottom:8px;} .meta{color:#64748b; font-size:13px; margin-bottom:18px;} .chip{display:inline-block; border:1px solid #e2e8f0; border-radius:9999px; padding:4px 10px; font-size:11px; margin-right:6px;} .section{margin-bottom:18px;} .item{margin:8px 0;} .label{font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#64748b; margin-bottom:2px;} .value{font-size:13px; line-height:1.6;}</style>
       </head><body>
         <h1>${data.person.name}</h1>
-        <div class="meta">${data.person.title || ""} ${data.person.company ? "— " + data.person.company : ""} | ${data.person.location || ""} | Confidence ${data.confidenceScore}%</div>
+        <div class="meta">${data.person.title || ""} ${data.person.company ? "— " + data.person.company : ""} | ${data.person.location || ""} | Confidence ${data.confidenceScore}%${typeof data.researchQuality === "number" && data.researchQuality > 0 ? ` | Research quality ${data.researchQuality}%` : ""}</div>
         <div>${data.company.description ? `<p style="font-size:13px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0;">${data.company.description}</p>` : ""}</div>
-        ${data.sections.map(s => `<div class="section"><h2>${s.title}</h2>${s.items.map(it => `<div class="item"><div class="label">${it.label} ${it.confidence ? `· ${it.confidence}%` : ""}</div><div class="value">${it.value}</div></div>`).join("")}</div>`).join("")}
+        ${data.sections.map(s => `<div class="section"><h2>${s.title}</h2>${s.items.map(it => `<div class="item"><div class="label">${it.label} ${it.confidence ? `· ${it.confidence}%` : ""}</div><div class="value">${mdToHtml(it.value)}${it.sourceUrl ? ` <span style="color:#7c3aed;font-size:11px;">source: ${it.sourceUrl}</span>` : ""}</div></div>`).join("")}</div>`).join("")}
+        ${data.whyNow && data.whyNow.length ? `<div class="section"><h2>Why Now — Timely Buying Signals</h2>${data.whyNow.map(w => `<div class="item"><div class="label">${w.event}${w.date ? ` · ${w.date}` : ""}</div><div class="value">${w.whyItMatters || ""}${w.source ? ` <span style="color:#7c3aed;font-size:11px;">source: ${w.source}</span>` : ""}</div></div>`).join("")}</div>` : ""}
+        ${data.timeline && data.timeline.length ? `<div class="section"><h2>Timeline & Events</h2>${data.timeline.map(t => `<div class="item"><div class="label">${t.date}</div><div class="value">${t.event}</div></div>`).join("")}</div>` : ""}
         <hr style="margin-top:32px; border:none; border-top:1px solid #e2e8f0;"/><p style="font-size:11px; color:#94a3b8; text-align:center;">Generated by Prospect Intelligence • ${new Date().toLocaleString()} • Confidence ${data.confidenceScore}%</p>
       </body></html>
     `;
@@ -303,6 +407,11 @@ function CaseDossier({ data, onSave }: { data: CaseData; onSave: () => void }) {
               </div>
               <span className="font-sans text-xs font-bold text-slate-700 dark:text-slate-300">{data.confidenceScore}%</span>
             </div>
+            {typeof data.researchQuality === "number" && data.researchQuality > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300" title="Research quality: source coverage, tiers, recency and corroboration">
+                <Shield size={12} /> Research quality {data.researchQuality}%
+              </span>
+            )}
             <button onClick={handleShareLink} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full border border-slate-200 dark:border-slate-600 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800">
               <ExternalLink size={12} /> SHARE LINK
             </button>
@@ -372,6 +481,55 @@ function CaseDossier({ data, onSave }: { data: CaseData; onSave: () => void }) {
         </div>
       )}
 
+      {/* Why-Now Signals */}
+      {data.whyNow && data.whyNow.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp size={14} className="text-[hsl(280,85%,55%)]" />
+            <span className="font-sans text-xs font-bold uppercase tracking-[0.14em] text-[hsl(280,85%,55%)]">Why Now — Timely Buying Signals</span>
+          </div>
+          <div className="space-y-2.5">
+            {data.whyNow.map((w, i) => (
+              <div key={i} className="p-3 rounded-xl bg-[hsl(280,85%,55%)/0.04] border border-[hsl(280,85%,55%)/0.08]">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">{w.event}</span>
+                  {w.date && <span className="text-[10px] font-mono text-slate-400 shrink-0">{w.date}</span>}
+                </div>
+                {w.whyItMatters && <div className="text-xs text-slate-600 dark:text-slate-300 mt-1">{w.whyItMatters}</div>}
+                {w.source && (
+                  <a href={w.source} target="_blank" rel="noopener" className="inline-flex items-center gap-1 mt-1 text-[10px] text-[hsl(280,85%,55%)] hover:underline">
+                    <ExternalLink size={9} /> {w.source.replace(/^https?:\/\/(www\.)?/, "").slice(0, 70)}
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Timeline */}
+      {data.timeline && data.timeline.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <Activity size={14} className="text-[hsl(280,85%,55%)]" />
+            <span className="font-sans text-xs font-bold uppercase tracking-[0.14em] text-[hsl(280,85%,55%)]">Timeline & Events</span>
+          </div>
+          <div className="space-y-2">
+            {data.timeline.map((t, i) => (
+              <div key={i} className="flex items-start gap-3 text-sm">
+                <span className="font-mono text-xs text-slate-400 shrink-0 w-24">{t.date}</span>
+                <span className="text-slate-700 dark:text-slate-300">{t.event}</span>
+                {t.source && (
+                  <a href={t.source} target="_blank" rel="noopener" className="text-[10px] text-[hsl(280,85%,55%)] hover:underline shrink-0">
+                    <ExternalLink size={9} />
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Single Clean Report - holistic view, not collapsible duplicates */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
@@ -398,9 +556,14 @@ function CaseDossier({ data, onSave }: { data: CaseData; onSave: () => void }) {
                     <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
                       {item.label} {item.confidence ? <span className="normal-case font-normal">· {item.confidence}% confidence</span> : null}
                     </div>
-                    <div className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-                      {item.value}
+                    <div className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+                      <RenderValue value={item.value} />
                     </div>
+                    {item.sourceUrl && (
+                      <a href={item.sourceUrl} target="_blank" rel="noopener" className="inline-flex items-center gap-1 mt-1 text-xs text-[hsl(280,85%,55%)] hover:underline">
+                        <ExternalLink size={10} /> {item.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 80)}
+                      </a>
+                    )}
                   </div>
                 ))}
               </div>

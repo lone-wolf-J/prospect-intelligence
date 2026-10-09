@@ -67,6 +67,187 @@ function resolveCompanyLineage(name: string): string | null {
   return null;
 }
 
+// ---- Prospect Intelligence Report: 21-section contract ----
+export const SPEC_SECTIONS = [
+  "Executive Summary",
+  "Executive Profile",
+  "Career Progression",
+  "Current Role & Responsibilities",
+  "Current Company Intelligence",
+  "Recent Public Activity",
+  "Thought Leadership Analysis",
+  "Professional Interests",
+  "Technology Landscape",
+  "Business Priorities",
+  "Buying Signal Analysis",
+  "Business Challenges",
+  "Stakeholder & Influence Assessment",
+  "Relationship Indicators",
+  "Strategic Sales Assessment",
+  "Personalized Conversation Starters",
+  "Discovery Questions",
+  "Recommended Outreach Strategy",
+  "Risks, Unknowns & Information Gaps",
+  "Source Appendix",
+  "Confidence Assessment",
+];
+
+const SECTION_ALIASES: Record<string, string> = {
+  "summary": "Executive Summary",
+  "executive summary": "Executive Summary",
+  "contact": "Contact",
+  "career": "Career Progression",
+  "career history": "Career Progression",
+  "career progression": "Career Progression",
+  "role": "Current Role & Responsibilities",
+  "current role": "Current Role & Responsibilities",
+  "current role & responsibilities": "Current Role & Responsibilities",
+  "current role and responsibilities": "Current Role & Responsibilities",
+  "responsibilities": "Current Role & Responsibilities",
+  "company": "Current Company Intelligence",
+  "company intelligence": "Current Company Intelligence",
+  "current company intelligence": "Current Company Intelligence",
+  "organization intelligence": "Current Company Intelligence",
+  "organisation intelligence": "Current Company Intelligence",
+  "activity": "Recent Public Activity",
+  "recent public activity": "Recent Public Activity",
+  "public activity": "Recent Public Activity",
+  "leadership": "Thought Leadership Analysis",
+  "thought leadership": "Thought Leadership Analysis",
+  "thought leadership analysis": "Thought Leadership Analysis",
+  "interests": "Professional Interests",
+  "professional interests": "Professional Interests",
+  "tech": "Technology Landscape",
+  "technology": "Technology Landscape",
+  "technology landscape": "Technology Landscape",
+  "priorities": "Business Priorities",
+  "business priorities": "Business Priorities",
+  "signals": "Buying Signal Analysis",
+  "signals analysis": "Buying Signal Analysis",
+  "buying signals": "Buying Signal Analysis",
+  "buying signal analysis": "Buying Signal Analysis",
+  "challenges": "Business Challenges",
+  "business challenges": "Business Challenges",
+  "stakeholders": "Stakeholder & Influence Assessment",
+  "stakeholder & influence assessment": "Stakeholder & Influence Assessment",
+  "stakeholder and influence assessment": "Stakeholder & Influence Assessment",
+  "stakeholder influence": "Stakeholder & Influence Assessment",
+  "relationships": "Relationship Indicators",
+  "relationship indicators": "Relationship Indicators",
+  "opportunities": "Strategic Sales Assessment",
+  "strategic sales assessment": "Strategic Sales Assessment",
+  "sales assessment": "Strategic Sales Assessment",
+  "openers": "Personalized Conversation Starters",
+  "conversation starters": "Personalized Conversation Starters",
+  "personalized conversation starters": "Personalized Conversation Starters",
+  "personalised conversation starters": "Personalized Conversation Starters",
+  "questions": "Discovery Questions",
+  "discovery questions": "Discovery Questions",
+  "strategy": "Recommended Outreach Strategy",
+  "outreach strategy": "Recommended Outreach Strategy",
+  "recommended outreach strategy": "Recommended Outreach Strategy",
+  "risks": "Risks, Unknowns & Information Gaps",
+  "risks & unknowns": "Risks, Unknowns & Information Gaps",
+  "risks and unknowns": "Risks, Unknowns & Information Gaps",
+  "risks, unknowns & information gaps": "Risks, Unknowns & Information Gaps",
+  "risks, unknowns and information gaps": "Risks, Unknowns & Information Gaps",
+  "unknowns": "Risks, Unknowns & Information Gaps",
+  "confidence": "Confidence Assessment",
+  "confidence assessment": "Confidence Assessment",
+  "sources": "Source Appendix",
+  "source appendix": "Source Appendix",
+  "sources appendix": "Source Appendix",
+  "personal background": "Personal Background",
+  "background": "Personal Background",
+  "timeline & events": "Timeline & Events",
+  "timeline and events": "Timeline & Events",
+  "timeline": "Timeline & Events",
+  "events": "Timeline & Events",
+};
+
+export function normalizeSectionTitle(title: string): string {
+  const t = (title || "").trim().replace(/\s+/g, " ");
+  return SECTION_ALIASES[t.toLowerCase()] || t;
+}
+
+function hostOf(u: string): string {
+  try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u || ""; }
+}
+
+function buildSourceAppendix(citations: any[], sources: any[], deepPages: any[]): { title: string; items: any[] } {
+  const items: any[] = [];
+  const seen = new Set<string>();
+  const push = (label: string, value: string, url: string | null, confidence: number) => {
+    const key = (url || label || value).toLowerCase();
+    if (seen.has(key) || items.length >= 24) return;
+    seen.add(key);
+    items.push({ label: (label || "Source").slice(0, 90), value, sourceUrl: url, confidence });
+  };
+  for (const c of citations || []) {
+    const parts = [c.claim, c.sourceUrl ? `via ${hostOf(c.sourceUrl)}` : "", `Tier ${c.tier ?? 3}`, `${Math.round((c.confidence ?? 0.7) * (c.confidence > 1 ? 1 : 100))}% confidence`].filter(Boolean);
+    push(c.sourceTitle || c.claim?.slice(0, 70) || c.sourceUrl || "Source", parts.join(" · "), c.sourceUrl || null, c.confidence > 1 ? Math.round(c.confidence) : Math.round((c.confidence ?? 0.7) * 100));
+  }
+  for (const s of sources || []) {
+    const conf = s.tier === 1 ? 90 : s.tier === 2 ? 75 : 60;
+    push(s.title || s.url || "Web source", `${(s.snippet || "").slice(0, 160)} · [Tier ${s.tier || 3} · ${s.source || "search"}${s.publishedAt ? ` · ${s.publishedAt}` : ""}]`, s.url || null, conf);
+  }
+  for (const p of deepPages || []) {
+    push(p.url ? hostOf(p.url) : "Deep page", `Deep-scraped page content used for analysis${p.url ? ` · ${p.url}` : ""}`, p.url || null, 70);
+  }
+  if (!items.length) items.push({ label: "Sources", value: "No sources captured in this run.", confidence: 0 });
+  return { title: "Source Appendix", items };
+}
+
+// Normalize titles, merge duplicates, guarantee all 21 spec sections exist, order canonically.
+// Returns which spec sections were missing (for an optional AI repair pass).
+export function enforceSectionContract(
+  sections: any[],
+  appendices?: { citations?: any[]; sources?: any[]; deepPages?: any[] }
+): { sections: any[]; missing: string[] } {
+  const byTitle = new Map<string, any>();
+  const extras: any[] = [];
+  for (const raw of sections || []) {
+    if (!raw || typeof raw !== "object") continue;
+    const title = normalizeSectionTitle(raw.title || "");
+    if (!title) continue;
+    const items = Array.isArray(raw.items) ? raw.items.filter((it: any) => it && typeof it === "object") : [];
+    const existing = byTitle.get(title);
+    if (existing) existing.items.push(...items);
+    else if (SPEC_SECTIONS.includes(title)) byTitle.set(title, { ...raw, title, items: [...items] });
+    else extras.push({ ...raw, title, items: [...items] });
+  }
+  const missing = SPEC_SECTIONS.filter(t => !byTitle.has(t));
+  for (const t of missing) {
+    byTitle.set(t, { title: t, items: [{ label: "Status", value: "No public information found for this section in the sources searched.", confidence: 0 }] });
+  }
+  if (appendices && !byTitle.get("Source Appendix")?.items?.length) {
+    byTitle.set("Source Appendix", buildSourceAppendix(appendices.citations || [], appendices.sources || [], appendices.deepPages || []));
+  }
+  // If the model produced a thin Source Appendix, top it up with captured sources
+  const appendix = byTitle.get("Source Appendix");
+  if (appendix && appendices && appendix.items.length < 5) {
+    const built = buildSourceAppendix(appendices.citations || [], appendices.sources || [], appendices.deepPages || []);
+    const seen = new Set(appendix.items.map((i: any) => (i.sourceUrl || i.label || "").toLowerCase()));
+    for (const it of built.items) {
+      if (appendix.items.length >= 24) break;
+      const k = (it.sourceUrl || it.label || "").toLowerCase();
+      if (!seen.has(k)) { seen.add(k); appendix.items.push(it); }
+    }
+  }
+  const ordered: any[] = [];
+  const exec = byTitle.get("Executive Summary");
+  if (exec) ordered.push(exec);
+  const contactIdx = extras.findIndex(e => e.title === "Contact");
+  if (contactIdx >= 0) ordered.push(extras.splice(contactIdx, 1)[0]);
+  for (const t of SPEC_SECTIONS) {
+    if (t === "Executive Summary") continue;
+    const s = byTitle.get(t);
+    if (s) ordered.push(s);
+  }
+  ordered.push(...extras);
+  return { sections: ordered, missing };
+}
+
 // Config-driven scrapers (per https://github.com/fabienvauchelles/scraping-workshop - per-site configs)
 const SCRAPER_CONFIG: Record<string, { parser: "api" | "html" | "browser"; priority: number }> = {
   "linkedin.com": { parser: "browser", priority: 1 },
@@ -771,6 +952,19 @@ AGGRESSIVE HOLISTIC RULES:
 - confidenceScore: 85-95 strong public figure, 60-84 moderate, 30-50 weak, 5-15 only if ZERO results.
 - Deduplicate: Career/Role items distinct. Avoid vague one-liners. Use Timeline for temporal reasoning.
 
+REPORT FORMAT - executive intelligence briefing (management-consulting style; analyze, do not merely summarize):
+- Return ALL 21 sections below, using these EXACT titles in this EXACT order: Executive Summary; Executive Profile; Career Progression; Current Role & Responsibilities; Current Company Intelligence; Recent Public Activity; Thought Leadership Analysis; Professional Interests; Technology Landscape; Business Priorities; Buying Signal Analysis; Business Challenges; Stakeholder & Influence Assessment; Relationship Indicators; Strategic Sales Assessment; Personalized Conversation Starters; Discovery Questions; Recommended Outreach Strategy; Risks, Unknowns & Information Gaps; Source Appendix; Confidence Assessment. Optional extras allowed after these: Contact, Personal Background, Timeline & Events.
+- DEPTH OVER BREVITY: every section gets substantive multi-sentence analysis, not one-liners. Each item must explain WHY it matters to a sales rep and what to do with it (actionable insight). Connect related findings across sections.
+- ANALYSIS NOT SUMMARY: identify patterns, relationships, likely initiatives, strategic themes, technology direction, executive priorities, risks and opportunities. Support factual statements with sourceUrl + confidence where possible.
+- EVIDENCE CLASS LABELS in every section: prefix each item label or value with "Verified Fact:" (directly stated in a source), "Likely (inference):" (plus one line of reasoning), or "Unknown:" (information gap). NEVER present an inference as a fact; every inference must show its reasoning.
+- Business Challenges MUST contain two labeled groups: "Verified Challenges" (each with source) and "Likely Challenges (inferences)" (each with reasoning). Same verified/inferred split applies to Business Priorities and Buying Signal Analysis.
+- SOURCE CONFLICTS: if sources disagree (title, tenure, dates, company), call out the conflict explicitly and state which source is more authoritative and why. Cross-reference before asserting.
+- LIMITED INFO: if public information is thin, state explicitly in Executive Summary: "Comprehensive research performed; limited publicly available information exists" and list the key Unknowns in Risks, Unknowns & Information Gaps.
+- Source Appendix: list every source actually used for this report: item label = source title, value = how it was used + tier + confidence, sourceUrl = link. Draw from citations/web/deep pages above.
+- TABLES: where a comparison helps (career history, tech stack, stakeholders), use a markdown table inside the item value (| Col | Col | rows).
+- ACTIONABLE: Conversation Starters must be personalized to THIS person's recent activity/interests; Discovery Questions must target THIS company's likely initiatives; Outreach Strategy must name channels, sequencing and timing. No generic advice.
+- Word-compatible structure: clean Heading-style section titles, bullet lists within values, no markdown headings (#) - the renderer prints titles itself.
+
 Return ONLY valid JSON:
 {
   "person": {"name": "string", "title": "string", "company": "string", "location": "string", "email": "string|null", "linkedin": "string|null", "phone": "string|null"},
@@ -784,15 +978,13 @@ Return ONLY valid JSON:
   "whyNow": [{"event": "string", "date": "string", "evidence": "string", "source": "string", "whyItMatters": "string"}],
   "timeline": [{"date": "string", "event": "string", "source": "string"}]
 }
-If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.
+If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.`;
 
-Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interests, Tech, Priorities, Signals, Challenges, Stakeholders, Relationships, Opportunities, Openers, Questions, Strategy, Risks, Confidence, Personal Background, Timeline & Events.`;
-
-  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 2200 });
+  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 6000 });
   console.log(`[SearchHandler] AI done via ${provider}`);
 
   // Ensure confidence + whyNow + timeline are present (repair path can drop fields)
-  const res = result as { confidenceScore?: number | null; whyNow?: any[]; timeline: any[] } & Record<string, any>;
+  const res = result as { confidenceScore?: number | null; whyNow?: any[]; timeline: any[]; sections?: any[] } & Record<string, any>;
   if (res && typeof res === 'object') {
     if (res.confidenceScore === undefined || res.confidenceScore === null) {
       res.confidenceScore = 50;
@@ -805,6 +997,34 @@ Sections: Summary, Contact, Career, Role, Company, Activity, Leadership, Interes
     if (!res.timeline || !Array.isArray(res.timeline) || res.timeline.length === 0) {
       res.timeline = [];
       console.log("[SearchHandler] AI result missing timeline, defaulting to empty array");
+    }
+    // Repair pass: model dropped spec sections (usually output truncation) -> one targeted call
+    try {
+      const current = (Array.isArray(res.sections) ? res.sections : []).map((s: any) => normalizeSectionTitle(s?.title || ""));
+      const missing = SPEC_SECTIONS.filter(t => !current.includes(t));
+      if (missing.length >= 2 && missing.length < SPEC_SECTIONS.length && res.confidenceScore >= 30) {
+        console.log("[SearchHandler] Repair pass for missing sections:", missing.join(" | "));
+        const repairPrompt = `You are completing a prospect intelligence report on "${query}".
+The report is missing these sections: ${missing.join("; ")}.
+
+EVIDENCE AVAILABLE:
+${factsText}
+
+WHY NOW: ${whyNowText}
+WEB RESULTS: ${webResults || "none"}
+DEEP PAGES: ${deepContent || "none"}
+
+Return ONLY valid JSON: {"sections": [{"title": "<exact section title from the list above>", "items": [{"label": "...", "value": "analytical multi-sentence content - verified facts labeled 'Verified Fact:', inferences labeled 'Likely (inference):' with reasoning", "sourceUrl": "string|null", "confidence": number}]}]}
+Cover EVERY missing section. Analyze, do not summarize. No markdown # headings. No text outside JSON.`;
+        const { result: repair } = await aiRegistry.generateJSON(repairPrompt, { temperature: 0.2, maxTokens: 3000 });
+        const repSections = (repair as any)?.sections;
+        if (Array.isArray(repSections) && repSections.length) {
+          res.sections = [...(Array.isArray(res.sections) ? res.sections : []), ...repSections];
+          console.log("[SearchHandler] Repair added", repSections.length, "sections");
+        }
+      }
+    } catch (e) {
+      console.log("[SearchHandler] Repair pass failed (non-fatal):", (e as any)?.message || e);
     }
   }
   return res;
@@ -830,16 +1050,23 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
     const derivedTimeline = (aiAnalysis.timeline && aiAnalysis.timeline.length ? aiAnalysis.timeline : null)
       || (sd.timeline && sd.timeline.length ? sd.timeline : null)
       || ((scrapedData as any).timeline && (scrapedData as any).timeline.length ? (scrapedData as any).timeline : []);
+    const citations = aiAnalysis.citations || (scrapedData as any).facts?.slice(0, 8) || [];
+    const { sections: fullSections, missing } = enforceSectionContract(sections, {
+      citations,
+      sources: (scrapedData.web || []).slice(0, 15),
+      deepPages: scrapedData.deepPages || [],
+    });
+    if (missing.length) console.log("[SearchHandler] Section contract stubbed:", missing.join(" | "));
     return {
       id, query, timestamp,
       person: { ...(aiAnalysis.person || { name: query, title: "Unknown - no public data found", company: "Unknown", linkedin: scrapedData.linkedin?.url || "", location: "Unknown" }), email: aiAnalysis.person?.email || contacts.find((c: any) => c.type === "email")?.value || null, phone: aiAnalysis.person?.phone || contacts.find((c: any) => c.type === "phone")?.value || null, linkedin: aiAnalysis.person?.linkedin || scrapedData.linkedin?.url || "" },
       contacts,
       company: aiAnalysis.company || { name: "Unknown", industry: "Unknown", size: "Unknown", revenue: null, founded: null, headquarters: "Unknown", website: "", description: "No verifiable public information found." },
-      sections,
+      sections: fullSections,
       aiInsights: aiAnalysis.aiInsights || [],
       confidenceScore: aiAnalysis.confidenceScore ?? 8,
       researchQuality: aiAnalysis.researchQuality || (scrapedData as any).quality || 0,
-      citations: aiAnalysis.citations || (scrapedData as any).facts?.slice(0, 8) || [],
+      citations,
       whyNow: derivedWhyNow,
       timeline: derivedTimeline,
       identity: (scrapedData as any).identity || null,
@@ -857,11 +1084,15 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
     };
   }
   const web = scrapedData.web || [];
+  const { sections: fullSections } = enforceSectionContract(
+    [{ title: "Web Results", items: web.slice(0, 5).map((r: any) => ({ label: r.title?.slice(0, 50) || "Result", value: `${r.snippet?.slice(0, 150) || ""} | ${r.url || ""}` })) }],
+    { citations: (scrapedData as any).facts?.slice(0, 8) || [], sources: web.slice(0, 15), deepPages: scrapedData.deepPages || [] }
+  );
   return {
     id, query, timestamp,
     person: { name: query.split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "), title: "", company: "", linkedin: scrapedData.linkedin?.url || "", location: "" },
     company: { name: "", industry: "", size: "", revenue: "", founded: "", headquarters: "", website: "", description: "" },
-    sections: [{ title: "Web Results", icon: "Globe", items: web.slice(0, 5).map((r: any) => ({ label: r.title?.slice(0, 50) || "Result", value: `${r.snippet?.slice(0, 150) || ""} | ${r.url || ""}` })) }],
+    sections: fullSections,
     aiInsights: [hasAiKey ? `AI key set (${process.env.GROQ_API_KEY ? "GROQ" : "GEMINI"}) but analysis failed` : "No AI keys", aiError ? `Error: ${aiError}` : "Check logs", `Crawled ${web.length} web results.`],
     confidenceScore: web.length ? 30 : 10,
     savedToPipeline: false,
