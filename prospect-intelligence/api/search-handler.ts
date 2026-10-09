@@ -228,7 +228,7 @@ export function enforceSectionContract(
     const appendixIsStub = !appendix || (appendix.items.length === 1 && STUB_RE.test(String(appendix.items[0]?.value || "")));
     if (appendixIsStub) {
       byTitle.set("Source Appendix", built);
-    } else if (appendix.items.length < 5) {
+    } else if (appendix.items.length < 8) {
       const seen = new Set(appendix.items.filter((i: any) => !STUB_RE.test(String(i.value || ""))).map((i: any) => (i.sourceUrl || i.label || "").toLowerCase()));
       appendix.items = appendix.items.filter((i: any) => !STUB_RE.test(String(i.value || "")));
       for (const it of built.items) {
@@ -958,7 +958,7 @@ ${enrich}
 
 RULES:
 - Cover ALL branches across domains: every org/role (incl. pre-rename names), education, volunteer, writing/books/speaking, awards, social handles, events. Not limited to LinkedIn.
-- Company rename: in Current Company Intelligence note "Formerly X, now Y" and call out the rename.
+- Company rename: only if the lineage note above gives old->new names, note "Formerly X, now Y" in Current Company Intelligence. NEVER invent a rename - if names are identical, say nothing about renames.
 - Timeline: build chronological Career Progression + Timeline & Events from TIMELINE above; prioritize 30/90/180-day signals.
 - Contacts: use ONLY scraped contacts above for person.email/phone/linkedin (null if none); show confidence% in Contact section; tag each social URL with its type. Never invent.
 - Evidence: ground every important claim in a FACT/source above with sourceUrl + confidence. Label items "Verified Fact:" / "Likely (inference): <one line of reasoning>" / "Unknown:". Never present an inference as a fact.
@@ -991,6 +991,7 @@ Return ONLY valid JSON:
   "whyNow": [{"event": "string", "date": "string", "evidence": "string", "source": "string", "whyItMatters": "string"}],
   "timeline": [{"date": "string", "event": "string", "source": "string"}]
 }
+Item value example: "Verified Fact: Became CEO in February 2014 [source: wikipedia.org, confidence 92%]. Likely (inference): signals deep operational authority - reasoning: CEO title plus board chair. Unknown: no public budget authority found."
 If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.`;
 
   const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 6000, reasoningEffort: "low" });
@@ -1047,6 +1048,27 @@ Cover EVERY missing section. Analyze, do not summarize. No markdown # headings. 
   return res;
 }
 
+const STUB_VALUE_RE = /^No public information found/;
+
+// If the model omitted Confidence Assessment, the contract stubs it with a
+// generic "no info" line - replace with a real assessment from our own metrics.
+function synthesizeConfidenceSection(sections: any[], scrapedData: any, aiConfidence: number, quality: number) {
+  const idx = sections.findIndex((s: any) => s?.title === "Confidence Assessment");
+  if (idx === -1) return sections;
+  const s = sections[idx];
+  const stub = !s.items?.length || (s.items.length === 1 && STUB_VALUE_RE.test(String(s.items[0]?.value || "")));
+  if (!stub) return sections;
+  const facts = ((scrapedData as any).facts || []).length;
+  const sources = ((scrapedData as any).web || []).length;
+  const deep = ((scrapedData as any).deepPages || []).length;
+  s.items = [{
+    label: `Overall confidence: ${aiConfidence}%`,
+    value: `Verified Fact: research quality ${quality}/100 from ${sources} sources, ${deep} deep pages and ${facts} deduplicated multi-source facts; identity confidence ${aiConfidence}%. Likely (inference): ${aiConfidence >= 70 ? "strong public profile with broad corroboration - safe to treat career and role statements as accurate" : aiConfidence >= 40 ? "moderate coverage - key claims corroborated but some sections rest on single sources" : "thin coverage - verify role and priorities before outreach"} - reasoning: derived from source count, fact corroboration and identity match quality. Unknown: private, paywalled or internal data is never covered by this research.`,
+    confidence: Math.min(90, Math.max(quality || 0, aiConfidence)),
+  }];
+  return sections;
+}
+
 function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: boolean, aiError: string | null) {
   const id = Date.now().toString();
   const timestamp = new Date().toISOString();
@@ -1074,6 +1096,9 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
       deepPages: scrapedData.deepPages || [],
     });
     if (missing.length) console.log("[SearchHandler] Section contract stubbed:", missing.join(" | "));
+    const confidenceScore = aiAnalysis.confidenceScore ?? 8;
+    const researchQuality = Math.min(100, Math.max(0, (scrapedData as any).quality || aiAnalysis.researchQuality || 0));
+    synthesizeConfidenceSection(fullSections, scrapedData, confidenceScore, researchQuality);
     return {
       id, query, timestamp,
       person: { ...(aiAnalysis.person || { name: query, title: "Unknown - no public data found", company: "Unknown", linkedin: scrapedData.linkedin?.url || "", location: "Unknown" }), email: aiAnalysis.person?.email || contacts.find((c: any) => c.type === "email")?.value || null, phone: aiAnalysis.person?.phone || contacts.find((c: any) => c.type === "phone")?.value || null, linkedin: aiAnalysis.person?.linkedin || scrapedData.linkedin?.url || "" },
@@ -1081,9 +1106,9 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
       company: aiAnalysis.company || { name: "Unknown", industry: "Unknown", size: "Unknown", revenue: null, founded: null, headquarters: "Unknown", website: "", description: "No verifiable public information found." },
       sections: fullSections,
       aiInsights: aiAnalysis.aiInsights || [],
-      confidenceScore: aiAnalysis.confidenceScore ?? 8,
+      confidenceScore,
       // Computed quality (evidence density) is objective; the model's self-report is unreliable (seen: 9/100 on a strong run)
-      researchQuality: Math.min(100, Math.max(0, (scrapedData as any).quality || aiAnalysis.researchQuality || 0)),
+      researchQuality,
       citations,
       whyNow: derivedWhyNow,
       timeline: derivedTimeline,
@@ -1106,6 +1131,7 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
     [{ title: "Web Results", items: web.slice(0, 5).map((r: any) => ({ label: r.title?.slice(0, 50) || "Result", value: `${r.snippet?.slice(0, 150) || ""} | ${r.url || ""}` })) }],
     { citations: (scrapedData as any).facts?.slice(0, 8) || [], sources: web.slice(0, 15), deepPages: scrapedData.deepPages || [] }
   );
+  synthesizeConfidenceSection(fullSections, scrapedData, web.length ? 30 : 10, (scrapedData as any).quality || 0);
   return {
     id, query, timestamp,
     person: { name: query.split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "), title: "", company: "", linkedin: scrapedData.linkedin?.url || "", location: "" },
