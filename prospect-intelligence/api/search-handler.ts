@@ -974,7 +974,7 @@ REPORT FORMAT - consulting briefing (analyze, do not merely summarize):
 - SOURCE CONFLICTS: if sources disagree (title, tenure, dates, company), state the conflict, choose the more authoritative source, explain why.
 - LIMITED INFO: if public info is thin, state in Executive Summary: "Comprehensive research performed; limited publicly available information exists" and list gaps in Risks, Unknowns & Information Gaps.
 - Source Appendix: every source actually used - item label = source title, value = how it was used + tier + confidence, sourceUrl = link.
-- TABLES: markdown table inside item values where comparison helps (career history, tech stack, stakeholders).
+- TABLES (mandatory): Career Progression, Technology Landscape, and Stakeholder & Influence Assessment must EACH contain at least one item whose value is a markdown table (| Col | Col | with header + rows). Use tables wherever else a comparison helps (career history, tech stack, stakeholders).
 - ACTIONABLE: Conversation Starters personalized to THIS person's recent activity/interests; Discovery Questions target THIS company's likely initiatives; Outreach Strategy names channels, sequencing, timing. No generic advice.
 - No markdown headings (#) - the renderer prints section titles; bullets are fine inside values.
 
