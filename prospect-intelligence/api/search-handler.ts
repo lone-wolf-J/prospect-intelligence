@@ -1082,7 +1082,8 @@ function buildCase(query: string, scrapedData: any, aiAnalysis: any, hasAiKey: b
       sections: fullSections,
       aiInsights: aiAnalysis.aiInsights || [],
       confidenceScore: aiAnalysis.confidenceScore ?? 8,
-      researchQuality: aiAnalysis.researchQuality || (scrapedData as any).quality || 0,
+      // Computed quality (evidence density) is objective; the model's self-report is unreliable (seen: 9/100 on a strong run)
+      researchQuality: Math.min(100, Math.max(0, (scrapedData as any).quality || aiAnalysis.researchQuality || 0)),
       citations,
       whyNow: derivedWhyNow,
       timeline: derivedTimeline,
