@@ -810,7 +810,9 @@ function buildReasoning(dm: DecisionMaker, orgName: string, rank: number, offeri
       ? `Senior sponsor in ${dept.label.toLowerCase()} - escalation path, not the day-to-day buyer`
       : `Function owner (${dm.departmentLabel})`;
   const placement = rank === 1
-    ? `Top pick for ${offering ? offering.pillar : "our offering"}: this role controls that purchase at ${orgName}.`
+    ? dm.department === "exec-sponsor"
+      ? `Ranked #1: senior sponsor at ${orgName} - useful for escalation, not the day-to-day buyer of ${offering ? offering.pillar : "our offering"}.`
+      : `Top pick for ${offering && dm.department === offering.departmentId ? offering.pillar : dept ? dept.pillar : "our offering"}: this role controls that purchase at ${orgName}.`
     : `Ranked #${rank} in ${dm.departmentLabel}.`;
   return `${dm.title} at ${orgName} - ${role}. ${owns}. ${corroboration}. ${direct}. ${placement}`;
 }
