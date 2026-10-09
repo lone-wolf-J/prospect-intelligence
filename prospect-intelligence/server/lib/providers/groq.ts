@@ -59,7 +59,7 @@ export class GroqProvider extends BaseProvider implements AIProvider {
           throw first;
         }
         // Rolling TPM window resets in seconds — wait it out, retry once.
-        console.warn("[GroqProvider] Rate limit hit, waiting 8s for window reset then retrying once");
+        console.warn("[GroqProvider] Rate limit hit:", first.message, "| waiting 8s then retrying once");
         await new Promise((r) => setTimeout(r, 8000));
         try {
           res = await call();
