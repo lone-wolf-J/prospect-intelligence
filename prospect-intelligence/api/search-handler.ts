@@ -920,8 +920,8 @@ async function analyzeWithTinyfish(query: string, scrapedData: any): Promise<any
 }
 
 async function analyzeWithAI(query: string, scrapedData: any, candidate: any = null) {
-  const webResults = (scrapedData.web || []).slice(0, 5).map((r: any, i: number) => `${i + 1}. ${r.title} (${r.url}) — ${r.snippet} [T${r.tier || 3}]`).join("\n");
-  const deepContent = (scrapedData.deepPages || []).slice(0, 3).map((d: any, i: number) => `Page ${i + 1} (${d.url}): ${d.content?.slice(0, 1000)}`).join("\n\n");
+  const webResults = (scrapedData.web || []).slice(0, 5).map((r: any, i: number) => `${i + 1}. ${r.title} (${r.url}) — ${(r.snippet || "").slice(0, 200)} [T${r.tier || 3}]`).join("\n");
+  const deepContent = (scrapedData.deepPages || []).slice(0, 3).map((d: any, i: number) => `Page ${i + 1} (${d.url}): ${d.content?.slice(0, 650)}`).join("\n\n");
   const contactsText = (scrapedData.contacts || []).map((c: any) => `${c.type}: ${c.value} (confidence ${c.confidence}%)`).join("\n") || "No contacts scraped";
   const enrich = scrapedData.enrichment?.publicApis ? `\n\nExtra context: ${scrapedData.enrichment.publicApis.slice(0, 300)}` : "";
   const factsText = (scrapedData.facts || []).slice(0, 6).map((f: any, i: number) => `${i + 1}. ${f.claim} | ${f.evidence.slice(0, 100)} [${f.sourceUrl}, T${f.tier}]`).join("\n") || "No structured facts";
@@ -934,54 +934,49 @@ async function analyzeWithAI(query: string, scrapedData: any, candidate: any = n
     return resolved ? `Company lineage note: ${comp} is now ${resolved}. Treat old and new names as same entity (e.g., PreludeSys/DemandBlue -> LevelShift). Explicitly call out the rename in Company section.` : "";
   })();
 
-  const prompt = `You are a prospect intelligence analyst doing an AGGRESSIVE, HOLISTIC deep dive - get EVERYTHING you can find about this person, not just professional. Analyze "${query}".
+  const prompt = `You are a prospect intelligence analyst producing an AGGRESSIVE, HOLISTIC deep dive - everything public about this person, professional AND personal. Analyze "${query}".
 
 FRESH WEB SEARCH (ranked, ${scrapedData.web?.length || 0} results, diverse org branches including events/timeline):
 ${webResults || "No web results"}
 
-DEEP PAGE CONTENT (5 diverse pages):
+DEEP PAGE CONTENT (3 pages):
 ${deepContent || "No deep pages"}
 
-STRUCTURED FACTS (extracted, deduplicated, with evidence and tier):
+STRUCTURED FACTS (extracted, deduplicated, evidence + tier):
 ${factsText}
 
-WHY NOW SIGNALS (recent events that make prospect relevant now):
+WHY NOW SIGNALS (recent events making prospect relevant now):
 ${whyNowText}
 
 TIMELINE (temporal):
 ${timelineText}
 
-SCRAPED CONTACTS + SOCIAL HANDLES (strict, with confidence):
+SCRAPED CONTACTS + SOCIAL HANDLES (strict, confidence):
 ${contactsText}
 ${lineageNote}
 ${enrich}
 
-AGGRESSIVE HOLISTIC RULES:
-- GET EVERYTHING: Professional history (every org/branch, including old names before rename), personal interests, education, volunteer/community, writing/books/speaking, social handles, location, events/timeline where person was speaker/participant, awards. Do NOT limit to LinkedIn.
-- BRANCHING: You MUST synthesize ALL branches found across diverse domains, not just single link's company. List all involvements in Career - deduplicate but keep distinct orgs. If old company renamed, note "Formerly X, now LevelShift (unified 2025)".
-- COMPANY RENAME: Explicitly note rename in Company section.
-- EVENTS & TIMELINE: Use Timeline above to build chronological career + event timeline. Include specific event names, dates, roles. Prioritize 30/90/180d recent signals.
-- SOCIAL HANDLES: Tag every scraped social URL under contacts with type and confidence. Do NOT invent.
-- CONTACTS: use ONLY scraped contacts above. Set person.email/phone/linkedin accordingly. If none, set null. Show confidence% in Contact section.
-- STRATEGIC INSIGHTS: Must clearly explain WHO this person is (role, company, professional focus, seniority, decision authority) and WHAT WOULD INTEREST HIM (based on his interests, role, company priorities, tech stack, events, personal motivations). Insights must be specific and evidence-backed, not generic.
-- HOLISTIC: Extract personal/outside-professional info if present (interests, volunteer, education, writing). If none, state "No public personal information found".
-- EVIDENCE: Every important claim must be grounded in a Fact (see structured FACTS above) with source, tier, confidence. Do NOT invent facts. Distinguish FACT vs INFERENCE vs HYPOTHESIS (label as Verified Fact / Strong Signal / Likely Implication / Research Hypothesis).
-- GROUND in web + deep + facts + contacts above.
+RULES:
+- Cover ALL branches across domains: every org/role (incl. pre-rename names), education, volunteer, writing/books/speaking, awards, social handles, events. Not limited to LinkedIn.
+- Company rename: in Current Company Intelligence note "Formerly X, now Y" and call out the rename.
+- Timeline: build chronological Career Progression + Timeline & Events from TIMELINE above; prioritize 30/90/180-day signals.
+- Contacts: use ONLY scraped contacts above for person.email/phone/linkedin (null if none); show confidence% in Contact section; tag each social URL with its type. Never invent.
+- Evidence: ground every important claim in a FACT/source above with sourceUrl + confidence. Label items "Verified Fact:" / "Likely (inference): <one line of reasoning>" / "Unknown:". Never present an inference as a fact.
+- Strategic insight: WHO is this person (role, company, seniority, decision authority) and WHAT would interest them (interests, priorities, tech stack, events, motivations) - specific and evidence-backed.
+- Holistic: include outside-professional info if present; if none, state "No public personal information found".
 - confidenceScore: 85-95 strong public figure, 60-84 moderate, 30-50 weak, 5-15 only if ZERO results.
-- Deduplicate: Career/Role items distinct. Avoid vague one-liners. Use Timeline for temporal reasoning.
+- Deduplicate career/role items; no vague one-liners.
 
-REPORT FORMAT - executive intelligence briefing (management-consulting style; analyze, do not merely summarize):
-- Return ALL 21 sections below, using these EXACT titles in this EXACT order: Executive Summary; Executive Profile; Career Progression; Current Role & Responsibilities; Current Company Intelligence; Recent Public Activity; Thought Leadership Analysis; Professional Interests; Technology Landscape; Business Priorities; Buying Signal Analysis; Business Challenges; Stakeholder & Influence Assessment; Relationship Indicators; Strategic Sales Assessment; Personalized Conversation Starters; Discovery Questions; Recommended Outreach Strategy; Risks, Unknowns & Information Gaps; Source Appendix; Confidence Assessment. Optional extras allowed after these: Contact, Personal Background, Timeline & Events.
-- DEPTH OVER BREVITY: every section gets substantive multi-sentence analysis, not one-liners. Each item must explain WHY it matters to a sales rep and what to do with it (actionable insight). Connect related findings across sections.
-- ANALYSIS NOT SUMMARY: identify patterns, relationships, likely initiatives, strategic themes, technology direction, executive priorities, risks and opportunities. Support factual statements with sourceUrl + confidence where possible.
-- EVIDENCE CLASS LABELS in every section: prefix each item label or value with "Verified Fact:" (directly stated in a source), "Likely (inference):" (plus one line of reasoning), or "Unknown:" (information gap). NEVER present an inference as a fact; every inference must show its reasoning.
-- Business Challenges MUST contain two labeled groups: "Verified Challenges" (each with source) and "Likely Challenges (inferences)" (each with reasoning). Same verified/inferred split applies to Business Priorities and Buying Signal Analysis.
-- SOURCE CONFLICTS: if sources disagree (title, tenure, dates, company), call out the conflict explicitly and state which source is more authoritative and why. Cross-reference before asserting.
-- LIMITED INFO: if public information is thin, state explicitly in Executive Summary: "Comprehensive research performed; limited publicly available information exists" and list the key Unknowns in Risks, Unknowns & Information Gaps.
-- Source Appendix: list every source actually used for this report: item label = source title, value = how it was used + tier + confidence, sourceUrl = link. Draw from citations/web/deep pages above.
-- TABLES: where a comparison helps (career history, tech stack, stakeholders), use a markdown table inside the item value (| Col | Col | rows).
-- ACTIONABLE: Conversation Starters must be personalized to THIS person's recent activity/interests; Discovery Questions must target THIS company's likely initiatives; Outreach Strategy must name channels, sequencing and timing. No generic advice.
-- Word-compatible structure: clean Heading-style section titles, bullet lists within values, no markdown headings (#) - the renderer prints titles itself.
+REPORT FORMAT - consulting briefing (analyze, do not merely summarize):
+- Return ALL 21 sections, EXACT titles, EXACT order: Executive Summary; Executive Profile; Career Progression; Current Role & Responsibilities; Current Company Intelligence; Recent Public Activity; Thought Leadership Analysis; Professional Interests; Technology Landscape; Business Priorities; Buying Signal Analysis; Business Challenges; Stakeholder & Influence Assessment; Relationship Indicators; Strategic Sales Assessment; Personalized Conversation Starters; Discovery Questions; Recommended Outreach Strategy; Risks, Unknowns & Information Gaps; Source Appendix; Confidence Assessment. Optional extras after: Contact, Personal Background, Timeline & Events.
+- DEPTH: every section gets substantive multi-sentence analysis saying WHY it matters to a sales rep and what to do (actionable). Connect findings across sections. Analyze patterns, initiatives, themes, risks, opportunities - not a one-pass summary.
+- Business Challenges, Business Priorities, Buying Signal Analysis: split into "Verified ..." (each with source) and "Likely ... (inferences)" (each with its reasoning).
+- SOURCE CONFLICTS: if sources disagree (title, tenure, dates, company), state the conflict, choose the more authoritative source, explain why.
+- LIMITED INFO: if public info is thin, state in Executive Summary: "Comprehensive research performed; limited publicly available information exists" and list gaps in Risks, Unknowns & Information Gaps.
+- Source Appendix: every source actually used - item label = source title, value = how it was used + tier + confidence, sourceUrl = link.
+- TABLES: markdown table inside item values where comparison helps (career history, tech stack, stakeholders).
+- ACTIONABLE: Conversation Starters personalized to THIS person's recent activity/interests; Discovery Questions target THIS company's likely initiatives; Outreach Strategy names channels, sequencing, timing. No generic advice.
+- No markdown headings (#) - the renderer prints section titles; bullets are fine inside values.
 
 Return ONLY valid JSON:
 {
