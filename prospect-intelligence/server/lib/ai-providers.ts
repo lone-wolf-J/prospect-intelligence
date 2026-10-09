@@ -10,6 +10,7 @@ export interface AIProvider {
 export interface GenerateOptions {
   temperature?: number;
   maxTokens?: number;
+  reasoningEffort?: "low" | "medium" | "high";
 }
 
 export interface QuotaStatus {

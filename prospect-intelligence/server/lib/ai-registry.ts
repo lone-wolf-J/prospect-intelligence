@@ -60,6 +60,12 @@ export class AIRegistry {
         const text = await provider.generate(prompt, options);
         console.log("[AI Registry] Raw response (first 500 chars):", text.substring(0, 500));
         let parsed = this.parseJsonRobust<T>(text);
+        if (!parsed) {
+          // Truncated output (hit max_tokens mid-JSON) is common with small TPM
+          // budgets — salvage locally instead of burning a provider repair call.
+          parsed = this.salvageTruncatedJson<T>(text);
+          if (parsed) console.log("[AI Registry] salvaged truncated JSON locally");
+        }
         if (parsed) {
           this.lastUsedProvider = provider.name;
           // record success is inside provider
@@ -69,7 +75,7 @@ export class AIRegistry {
         try {
           const repairPrompt = `Fix this broken JSON and return ONLY valid JSON (no markdown, no explanation). Ensure all strings are properly escaped, no trailing commas, no unescaped newlines:\n\n${text.slice(0, 6000)}`;
           // Use same provider for repair if possible, else fallback
-          const repairText = await provider.generate(repairPrompt, { temperature: 0, maxTokens: 4000 }).catch(() => text);
+          const repairText = await provider.generate(repairPrompt, { temperature: 0, maxTokens: 4000, reasoningEffort: "low" }).catch(() => text);
           const repairedParsed = this.parseJsonRobust<T>(repairText);
           if (repairedParsed) {
             console.log(`[AI Registry] ${provider.name} repair succeeded`);
@@ -149,6 +155,42 @@ export class AIRegistry {
           return JSON.parse(raw) as T;
         } catch { continue; }
       }
+    }
+    return null;
+  }
+
+  private salvageTruncatedJson<T>(text: string): T | null {
+    const start = text.indexOf("{");
+    if (start === -1) return null;
+    const src = text.slice(start);
+    const stack: string[] = [];
+    const cuts: { pos: number; closers: string }[] = [];
+    let inStr = false;
+    let esc = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === "{") stack.push("}");
+      else if (ch === "[") stack.push("]");
+      else if (ch === "}" || ch === "]") {
+        const expect = stack.pop();
+        if (expect !== ch) return null; // mismatched structure, not simple truncation
+        if (stack.length) cuts.push({ pos: i, closers: stack.slice().reverse().join("") });
+      }
+    }
+    // Try cut points from latest to earliest: keep the longest parseable prefix
+    for (let c = cuts.length - 1; c >= 0; c--) {
+      const cand = src.slice(0, cuts[c].pos + 1) + cuts[c].closers;
+      try {
+        const parsed = JSON.parse(cand) as T;
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch { /* try earlier cut */ }
     }
     return null;
   }

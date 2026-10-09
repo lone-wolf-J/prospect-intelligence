@@ -993,7 +993,7 @@ Return ONLY valid JSON:
 }
 If ZERO results, set title "Unknown - no public data found" and confidence 8. Otherwise curate aggressively and holistically. Every important item should have sourceUrl and confidence where possible.`;
 
-  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 6000 });
+  const { result, provider } = await aiRegistry.generateJSON(prompt, { temperature: 0.2, maxTokens: 6000, reasoningEffort: "low" });
   console.log(`[SearchHandler] AI done via ${provider}`);
 
   // Ensure confidence + whyNow + timeline are present (repair path can drop fields)
@@ -1029,7 +1029,7 @@ DEEP PAGES: ${deepContent || "none"}
 
 Return ONLY valid JSON: {"sections": [{"title": "<exact section title from the list above>", "items": [{"label": "...", "value": "analytical multi-sentence content - verified facts labeled 'Verified Fact:', inferences labeled 'Likely (inference):' with reasoning", "sourceUrl": "string|null", "confidence": number}]}]}
 Cover EVERY missing section. Analyze, do not summarize. No markdown # headings. No text outside JSON.`;
-        const { result: repair } = await aiRegistry.generateJSON(repairPrompt, { temperature: 0.2, maxTokens: 3000 });
+        const { result: repair } = await aiRegistry.generateJSON(repairPrompt, { temperature: 0.2, maxTokens: 3000, reasoningEffort: "low" });
         const repSections = ((repair as any)?.sections || []).filter((s: any) =>
           missing.some(m => normalizeSectionTitle(s?.title || "").toLowerCase() === m.toLowerCase())
         );

@@ -48,6 +48,7 @@ export class GroqProvider extends BaseProvider implements AIProvider {
         messages: [{ role: "user", content: prompt }],
         temperature: options?.temperature ?? 0.3,
         max_tokens: maxTokens,
+        ...(options?.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
       });
       let res: any;
       try {
